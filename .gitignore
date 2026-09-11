@@ -1,0 +1,5 @@
+.env
+wa-calendar.db
+wa-calendar.db-shm
+wa-calendar.db-wal
+target/
