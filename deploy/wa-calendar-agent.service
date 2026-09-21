@@ -1,0 +1,29 @@
+[Unit]
+Description=Private WhatsApp Calendar Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wa-calendar
+Group=wa-calendar
+WorkingDirectory=/opt/wa-calendar-agent
+EnvironmentFile=/etc/wa-calendar-agent.env
+ExecStart=/opt/wa-calendar-agent/wa-calendar-agent run
+Restart=on-failure
+RestartSec=5
+CPUQuota=25%
+CPUWeight=20
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=128
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wa-calendar-agent
+
+[Install]
+WantedBy=multi-user.target
