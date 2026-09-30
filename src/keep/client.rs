@@ -36,6 +36,6 @@ impl GoogleKeepWebhookClient {
         response
             .json()
             .await
-            .map_err(|error| AgentError::InvalidWebhookResponse(error.to_string()))
+            .map_err(|error| AgentError::upstream("Keep bridge", error.to_string()))
     }
 }

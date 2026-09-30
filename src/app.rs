@@ -1,23 +1,22 @@
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use tracing::{debug, info, warn};
 
 use crate::{
-    calendar::{
-        CalendarWebhookClient, CalendarWebhookRequest, CalendarWebhookResponse, ConfirmationRequest,
-    },
+    calendar::{format_time, CalendarOutcome, CalendarService, EventCandidate},
     commands::{is_owner_jids, is_owner_self_chat, route, Route, TaskRoute},
     config::Config,
     db::{MessageStatus, NewTask, PendingConfirmation, StateStore, Task},
     error::AgentError,
-    incoming::IncomingCommand,
+    google::gemini::ExtractionInput,
+    incoming::{CommandContent, IncomingCommand},
     keep::{GoogleKeepNoteRequest, GoogleKeepWebhookClient, GoogleKeepWebhookResponse},
 };
 
 pub struct Agent {
     config: Config,
-    calendar: CalendarWebhookClient,
+    calendar: CalendarService,
     keep: Option<GoogleKeepWebhookClient>,
     store: StateStore,
 }
@@ -30,7 +29,7 @@ pub enum ProcessOutcome {
 impl Agent {
     pub fn new(
         config: Config,
-        calendar: CalendarWebhookClient,
+        calendar: CalendarService,
         keep: Option<GoogleKeepWebhookClient>,
         store: StateStore,
     ) -> Self {
@@ -126,52 +125,31 @@ impl Agent {
         command: &IncomingCommand,
         text: String,
     ) -> Result<ProcessOutcome, AgentError> {
-        let request = self.text_request(command, text);
-        self.store
-            .set_message_status(&command.message_id, MessageStatus::SentToN8n)
-            .await?;
-        match self.calendar.submit(request).await {
-            Ok(response) => self.finish_response(command, response).await,
-            Err(error) => {
-                self.store
-                    .set_message_status(&command.message_id, MessageStatus::Failed)
-                    .await?;
-                warn!(message_id = %command.message_id, error = %error, "calendar webhook failed");
-                Ok(ProcessOutcome::Reply(
-                    "Couldn't add that to Calendar right now. Please try again.".to_owned(),
-                ))
-            }
-        }
+        self.submit(command, ExtractionInput::Text(text)).await
     }
 
     async fn process_voice(
         &self,
         mut command: IncomingCommand,
     ) -> Result<ProcessOutcome, AgentError> {
-        let content = std::mem::replace(
-            &mut command.content,
-            crate::incoming::CommandContent::UnsupportedMedia,
-        );
-        let crate::incoming::CommandContent::Voice { mime_type, data } = content else {
+        let content = std::mem::replace(&mut command.content, CommandContent::UnsupportedMedia);
+        let CommandContent::Voice { mime_type, data } = content else {
             return Ok(ProcessOutcome::Ignore);
         };
-        let request = self.audio_request(&command, mime_type, data);
+        self.submit(&command, ExtractionInput::Audio { mime_type, data })
+            .await
+    }
+
+    async fn submit(
+        &self,
+        command: &IncomingCommand,
+        input: ExtractionInput,
+    ) -> Result<ProcessOutcome, AgentError> {
         self.store
-            .set_message_status(&command.message_id, MessageStatus::SentToN8n)
+            .set_message_status(&command.message_id, MessageStatus::Submitted)
             .await?;
-        match self.calendar.submit(request).await {
-            Ok(response) => self.finish_response(&command, response).await,
-            Err(error) => {
-                self.store
-                    .set_message_status(&command.message_id, MessageStatus::Failed)
-                    .await?;
-                warn!(message_id = %command.message_id, error = %error, "voice calendar webhook failed");
-                Ok(ProcessOutcome::Reply(
-                    "Couldn't add that voice note to Calendar right now. Please try again."
-                        .to_owned(),
-                ))
-            }
-        }
+        let result = self.calendar.handle(&command.message_id, input).await;
+        self.finish_calendar(command, result).await
     }
 
     async fn process_confirmation(
@@ -187,25 +165,21 @@ impl Agent {
                 "There is no pending calendar request to confirm.".to_owned(),
             ));
         };
-        self.store
-            .set_message_status(&command.message_id, MessageStatus::SentToN8n)
-            .await?;
-        let request = ConfirmationRequest {
-            request_id: pending.request_id,
-            approved,
-        };
-        match self.calendar.confirm(&request).await {
-            Ok(response) => self.finish_response(command, response).await,
-            Err(error) => {
-                self.store
-                    .set_message_status(&command.message_id, MessageStatus::Failed)
-                    .await?;
-                warn!(message_id = %command.message_id, error = %error, "confirmation webhook failed");
-                Ok(ProcessOutcome::Reply(
-                    "Couldn't update that calendar request. Please try again.".to_owned(),
-                ))
-            }
+        if !approved {
+            self.store
+                .set_message_status(&command.message_id, MessageStatus::Completed)
+                .await?;
+            return Ok(ProcessOutcome::Reply("Cancelled.".to_owned()));
         }
+        let candidate: EventCandidate = serde_json::from_str(&pending.candidate_json)?;
+        self.store
+            .set_message_status(&command.message_id, MessageStatus::Submitted)
+            .await?;
+        let result = self
+            .calendar
+            .create(&pending.original_message_id, &candidate)
+            .await;
+        self.finish_calendar(command, result).await
     }
 
     async fn process_task(
@@ -261,17 +235,30 @@ impl Agent {
         Ok(ProcessOutcome::Reply(reply))
     }
 
-    async fn finish_response(
+    async fn finish_calendar(
         &self,
         command: &IncomingCommand,
-        response: CalendarWebhookResponse,
+        result: Result<CalendarOutcome, AgentError>,
     ) -> Result<ProcessOutcome, AgentError> {
-        let reply = match response {
-            CalendarWebhookResponse::Created { message, .. } => message,
-            CalendarWebhookResponse::Error { message } => {
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.store
+                    .set_message_status(&command.message_id, MessageStatus::Failed)
+                    .await?;
+                warn!(message_id = %command.message_id, %error, "calendar request failed");
+                return Ok(ProcessOutcome::Reply(format!(
+                    "Couldn't add that to Calendar: {error}"
+                )));
+            }
+        };
+        let reply = match outcome {
+            CalendarOutcome::Created { message, .. }
+            | CalendarOutcome::AlreadyAdded { message } => message,
+            CalendarOutcome::Error { message } => {
                 format!("Couldn't add that to Calendar: {message}")
             }
-            CalendarWebhookResponse::NeedsConfirmation {
+            CalendarOutcome::NeedsConfirmation {
                 request_id,
                 candidate,
                 message,
@@ -295,44 +282,6 @@ impl Agent {
         info!(message_id = %command.message_id, "calendar command completed");
         Ok(ProcessOutcome::Reply(reply))
     }
-
-    pub fn text_request(&self, command: &IncomingCommand, text: String) -> CalendarWebhookRequest {
-        let timestamp = in_timezone(command.timestamp, self.config.timezone);
-        let current_time = in_timezone(Utc::now(), self.config.timezone);
-        CalendarWebhookRequest::Text {
-            message_id: command.message_id.clone(),
-            chat_id: command.chat_id.clone(),
-            timestamp,
-            timezone: self.config.timezone.name().to_owned(),
-            current_time,
-            default_event_duration_minutes: self.config.default_event_duration_minutes,
-            text,
-        }
-    }
-
-    fn audio_request(
-        &self,
-        command: &IncomingCommand,
-        mime_type: Option<String>,
-        data: Vec<u8>,
-    ) -> CalendarWebhookRequest {
-        let timestamp = in_timezone(command.timestamp, self.config.timezone);
-        let current_time = in_timezone(Utc::now(), self.config.timezone);
-        CalendarWebhookRequest::Audio {
-            message_id: command.message_id.clone(),
-            chat_id: command.chat_id.clone(),
-            timestamp,
-            timezone: self.config.timezone.name().to_owned(),
-            current_time,
-            default_event_duration_minutes: self.config.default_event_duration_minutes,
-            mime_type,
-            data,
-        }
-    }
-}
-
-fn in_timezone(time: DateTime<Utc>, timezone: chrono_tz::Tz) -> DateTime<chrono::FixedOffset> {
-    time.with_timezone(&timezone).fixed_offset()
 }
 
 fn format_task_created(
@@ -371,10 +320,4 @@ fn format_task_list(tasks: &[Task], timezone: chrono_tz::Tz) -> String {
         lines.push(format!("{}. {}{}", task.id, task.title, due));
     }
     lines.join("\n")
-}
-
-fn format_time(time: DateTime<Utc>, timezone: chrono_tz::Tz) -> String {
-    time.with_timezone(&timezone)
-        .format("%-d %b, %-I:%M %p")
-        .to_string()
 }

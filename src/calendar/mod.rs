@@ -1,7 +1,7 @@
-mod client;
+mod service;
 mod types;
+pub mod validate;
 
-pub use client::CalendarWebhookClient;
-pub use types::{
-    CalendarWebhookRequest, CalendarWebhookResponse, ConfirmationRequest, EventCandidate,
-};
+pub(crate) use service::format_time;
+pub use service::CalendarService;
+pub use types::{CalendarEvent, CalendarOutcome, EventCandidate};

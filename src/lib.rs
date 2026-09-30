@@ -4,6 +4,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod google;
 pub mod incoming;
 pub mod keep;
 pub mod whatsapp;

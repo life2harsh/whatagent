@@ -1,50 +1,14 @@
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum CalendarWebhookRequest {
-    Text {
-        message_id: String,
-        chat_id: String,
-        timestamp: DateTime<FixedOffset>,
-        timezone: String,
-        current_time: DateTime<FixedOffset>,
-        default_event_duration_minutes: u32,
-        text: String,
-    },
-    Audio {
-        message_id: String,
-        chat_id: String,
-        timestamp: DateTime<FixedOffset>,
-        timezone: String,
-        current_time: DateTime<FixedOffset>,
-        default_event_duration_minutes: u32,
-        mime_type: Option<String>,
-        #[serde(skip_serializing)]
-        data: Vec<u8>,
-    },
-}
-
-impl CalendarWebhookRequest {
-    pub fn message_id(&self) -> &str {
-        match self {
-            Self::Text { message_id, .. } | Self::Audio { message_id, .. } => message_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ConfirmationRequest {
-    pub request_id: String,
-    pub approved: bool,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "snake_case")]
-pub enum CalendarWebhookResponse {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CalendarOutcome {
     Created {
         event: CalendarEvent,
+        message: String,
+    },
+    /// The event was already created for this message (a replay or retry).
+    AlreadyAdded {
         message: String,
     },
     NeedsConfirmation {
@@ -67,9 +31,16 @@ pub struct CalendarEvent {
     pub html_url: Option<String>,
 }
 
+/// A validated event, ready to create. Stored as JSON while awaiting confirmation.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EventCandidate {
     pub title: String,
     pub start: DateTime<FixedOffset>,
     pub end: DateTime<FixedOffset>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub recurrence: Option<String>,
 }

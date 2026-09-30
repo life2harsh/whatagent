@@ -8,6 +8,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
@@ -17,6 +18,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 qrcode = "0.14"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+ring = "0.17"
 rusqlite = { version = "0.39", features = ["bundled"] }
 thiserror = "2.0"
 tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal", "time"] }

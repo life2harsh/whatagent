@@ -13,7 +13,7 @@ pub struct StateStore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageStatus {
     Received,
-    SentToN8n,
+    Submitted,
     Completed,
     Failed,
 }
@@ -22,7 +22,8 @@ impl MessageStatus {
     fn as_str(self) -> &'static str {
         match self {
             Self::Received => "received",
-            Self::SentToN8n => "sent_to_n8n",
+            // Stored value predates the n8n removal; kept for existing databases.
+            Self::Submitted => "sent_to_n8n",
             Self::Completed => "completed",
             Self::Failed => "failed",
         }

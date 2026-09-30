@@ -5,9 +5,14 @@ use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 use wa_calendar_agent::{
     app::Agent,
-    calendar::CalendarWebhookClient,
+    calendar::CalendarService,
     config::Config,
     db::StateStore,
+    google::{
+        auth::{ServiceAccountAuth, CALENDAR_EVENTS_SCOPE},
+        calendar::GoogleCalendarClient,
+        gemini::GeminiClient,
+    },
     incoming::{CommandContent, IncomingCommand},
     keep::GoogleKeepWebhookClient,
 };
@@ -36,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let cli = Cli::parse();
     if matches!(&cli.command, Command::Pair) {
-        let session_database_path = Config::whatsapp_session_database_path_from_env()?;
+        let session_database_path = Config::whatsapp_session_database_path_from_env();
         wa_calendar_agent::whatsapp::pair(session_database_path).await?;
         return Ok(());
     }
@@ -45,17 +50,35 @@ async fn main() -> anyhow::Result<()> {
     let http = reqwest::Client::builder()
         .timeout(config.request_timeout)
         .build()?;
-    let calendar = CalendarWebhookClient::new(
+    let gemini = GeminiClient::new(
         http.clone(),
-        config.calendar_webhook_url.clone(),
-        config.audio_webhook_url.clone(),
-        config.confirm_webhook_url.clone(),
-        config.webhook_secret.clone(),
+        config.gemini_base_url.clone(),
+        config.gemini_api_key.clone(),
+        config.gemini_text_model.clone(),
+        config.gemini_audio_model.clone(),
+    );
+    let google_auth = ServiceAccountAuth::from_file(
+        http.clone(),
+        &config.google_service_account_key_path,
+        CALENDAR_EVENTS_SCOPE,
+    )?;
+    let google_calendar = GoogleCalendarClient::new(
+        http.clone(),
+        config.google_calendar_base_url.clone(),
+        config.google_calendar_id.clone(),
+        Arc::new(google_auth),
+    );
+    let calendar = CalendarService::new(
+        gemini,
+        google_calendar,
+        config.timezone,
+        config.default_event_duration_minutes,
     );
     let keep = config
-        .keep_webhook_url
+        .keep_bridge_url
         .clone()
-        .map(|url| GoogleKeepWebhookClient::new(http, url, config.webhook_secret.clone()));
+        .zip(config.keep_bridge_token.clone())
+        .map(|(url, token)| GoogleKeepWebhookClient::new(http, url, token));
     let store = StateStore::connect(&config.database_url).await?;
     let owner_jid = config.owner_jid.clone();
     let session_database_path = config.whatsapp_session_database_path.clone();

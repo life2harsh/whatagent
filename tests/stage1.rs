@@ -1,6 +1,5 @@
 use chrono::{TimeZone, Utc};
 use wa_calendar_agent::{
-    calendar::{CalendarWebhookClient, CalendarWebhookRequest, CalendarWebhookResponse},
     commands::{route, Route, TaskRoute},
     db::{MessageStatus, NewTask, StateStore},
     incoming::{CommandContent, IncomingCommand},
@@ -92,7 +91,7 @@ async fn duplicate_message_id_is_not_started_twice() {
     let store = StateStore::connect("sqlite::memory:").await.unwrap();
     assert!(store.begin_message("message-1").await.unwrap());
     store
-        .set_message_status("message-1", MessageStatus::SentToN8n)
+        .set_message_status("message-1", MessageStatus::Submitted)
         .await
         .unwrap();
     assert!(!store.begin_message("message-1").await.unwrap());
@@ -192,74 +191,4 @@ async fn keep_request_uses_typed_response_and_task_idempotency() {
         response,
         GoogleKeepWebhookResponse::Created { note, .. } if note.name == "notes/keep-task-7"
     ));
-}
-
-#[test]
-fn webhook_response_variants_deserialize() {
-    let created: CalendarWebhookResponse = serde_json::from_str(r#"{
-        "status":"created","event":{"id":"g1","title":"OSDC meeting","start":"2026-09-12T18:00:00+05:30","end":"2026-09-12T19:00:00+05:30","calendar":"primary","html_url":null},"message":"Added"
-    }"#).unwrap();
-    let pending: CalendarWebhookResponse = serde_json::from_str(r#"{
-        "status":"needs_confirmation","request_id":"abc","candidate":{"title":"OSDC meeting","start":"2026-09-12T18:00:00+05:30","end":"2026-09-12T19:00:00+05:30"},"message":"Confirm"
-    }"#).unwrap();
-    let error: CalendarWebhookResponse =
-        serde_json::from_str(r#"{"status":"error","message":"No time"}"#).unwrap();
-    assert!(matches!(created, CalendarWebhookResponse::Created { .. }));
-    assert!(matches!(
-        pending,
-        CalendarWebhookResponse::NeedsConfirmation { .. }
-    ));
-    assert!(matches!(error, CalendarWebhookResponse::Error { .. }));
-}
-
-#[tokio::test]
-async fn voice_request_posts_complete_multipart_payload() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/audio"))
-        .and(header("authorization", "Bearer secret"))
-        .and(header("x-idempotency-key", "voice-1"))
-        .and(body_string_contains("name=\"type\""))
-        .and(body_string_contains("audio"))
-        .and(body_string_contains("name=\"chat_id\""))
-        .and(body_string_contains("100000000000001@lid"))
-        .and(body_string_contains("name=\"timezone\""))
-        .and(body_string_contains("Asia/Kolkata"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "status": "created",
-            "event": {
-                "id": "g-voice",
-                "title": "Voice meeting",
-                "start": "2026-09-14T18:00:00+05:30",
-                "end": "2026-09-14T19:00:00+05:30",
-                "calendar": "primary",
-                "html_url": null
-            },
-            "message": "Added to Google Calendar: Voice meeting"
-        })))
-        .mount(&server)
-        .await;
-
-    let request = CalendarWebhookRequest::Audio {
-        message_id: "voice-1".to_owned(),
-        chat_id: "100000000000001@lid".to_owned(),
-        timestamp: chrono::DateTime::parse_from_rfc3339("2026-09-13T20:00:00+05:30").unwrap(),
-        timezone: "Asia/Kolkata".to_owned(),
-        current_time: chrono::DateTime::parse_from_rfc3339("2026-09-13T20:00:02+05:30").unwrap(),
-        default_event_duration_minutes: 60,
-        mime_type: Some("audio/ogg; codecs=opus".to_owned()),
-        data: b"voice-note".to_vec(),
-    };
-    let http = reqwest::Client::new();
-    let calendar = CalendarWebhookClient::new(
-        http,
-        url::Url::parse(&format!("{}/calendar", server.uri())).unwrap(),
-        url::Url::parse(&format!("{}/audio", server.uri())).unwrap(),
-        url::Url::parse(&format!("{}/confirm", server.uri())).unwrap(),
-        "secret".to_owned(),
-    );
-
-    let response = calendar.submit(request).await.unwrap();
-
-    assert!(matches!(response, CalendarWebhookResponse::Created { .. }));
 }
