@@ -1,0 +1,28 @@
+[Unit]
+Description=Google Keep bridge for wa-calendar-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wa-calendar
+Group=wa-calendar
+WorkingDirectory=/opt/wa-calendar-agent/keep-bridge
+EnvironmentFile=/etc/wa-calendar-keep-bridge.env
+ExecStart=/opt/wa-calendar-agent/keep-bridge/venv/bin/python keep_bridge.py
+Restart=on-failure
+RestartSec=10
+CPUQuota=15%
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=32
+Nice=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/wa-calendar-agent/keep-bridge
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
