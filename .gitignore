@@ -3,3 +3,15 @@ wa-calendar.db
 wa-calendar.db-shm
 wa-calendar.db-wal
 target/
+
+# Credentials: the WhatsApp linked-device session and Google keys.
+wa-session.db
+wa-session.db-shm
+wa-session.db-wal
+service-account*.json
+keep-bridge/keep-state.json
+keep-bridge/keep-bridge.db
+keep-bridge/venv/
+
+# Local cross-compilation toolchain.
+.local-cross/
