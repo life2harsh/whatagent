@@ -248,7 +248,8 @@ impl Agent {
                     .await?;
                 warn!(message_id = %command.message_id, %error, "calendar request failed");
                 return Ok(ProcessOutcome::Reply(format!(
-                    "Couldn't add that to Calendar: {error}"
+                    "Couldn't add that to Calendar. {}",
+                    error.user_message()
                 )));
             }
         };

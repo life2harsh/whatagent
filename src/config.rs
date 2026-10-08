@@ -13,8 +13,8 @@ pub struct Config {
     pub owner_jid: String,
     pub gemini_api_key: String,
     pub gemini_base_url: Url,
-    pub gemini_text_model: String,
-    pub gemini_audio_model: String,
+    pub gemini_text_models: Vec<String>,
+    pub gemini_audio_models: Vec<String>,
     pub google_service_account_key_path: PathBuf,
     pub google_calendar_id: String,
     pub google_calendar_base_url: Url,
@@ -38,8 +38,16 @@ impl Config {
         let timezone = required("USER_TIMEZONE")?.parse::<Tz>().map_err(|_| {
             AgentError::Config("USER_TIMEZONE must be a valid IANA timezone".to_owned())
         })?;
-        let gemini_text_model =
+        let text_model =
             optional("GEMINI_MODEL").unwrap_or_else(|| "gemini-3.5-flash-lite".to_owned());
+        let audio_model = optional("GEMINI_AUDIO_MODEL").unwrap_or_else(|| text_model.clone());
+        let fallbacks: Vec<String> = optional("GEMINI_FALLBACK_MODELS")
+            .unwrap_or_else(|| DEFAULT_GEMINI_FALLBACK_MODELS.to_owned())
+            .split(',')
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned)
+            .collect();
         let keep_bridge_url = optional("KEEP_BRIDGE_URL")
             .map(|value| url("KEEP_BRIDGE_URL", &value))
             .transpose()?;
@@ -57,9 +65,8 @@ impl Config {
                 "GEMINI_BASE_URL",
                 &optional("GEMINI_BASE_URL").unwrap_or_else(|| gemini::DEFAULT_BASE_URL.to_owned()),
             )?,
-            gemini_audio_model: optional("GEMINI_AUDIO_MODEL")
-                .unwrap_or_else(|| gemini_text_model.clone()),
-            gemini_text_model,
+            gemini_text_models: model_chain(&text_model, &fallbacks),
+            gemini_audio_models: model_chain(&audio_model, &fallbacks),
             google_service_account_key_path: required("GOOGLE_SERVICE_ACCOUNT_KEY_PATH")?.into(),
             google_calendar_id: required("GOOGLE_CALENDAR_ID")?,
             google_calendar_base_url: url(
@@ -83,6 +90,21 @@ impl Config {
             whatsapp_session_database_path: Self::whatsapp_session_database_path_from_env(),
         })
     }
+}
+
+/// Tried in order after the primary model when Gemini is overloaded.
+const DEFAULT_GEMINI_FALLBACK_MODELS: &str =
+    "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-latest";
+
+/// The primary model followed by the fallbacks, without duplicates.
+fn model_chain(primary: &str, fallbacks: &[String]) -> Vec<String> {
+    let mut chain = vec![primary.to_owned()];
+    for model in fallbacks {
+        if !chain.contains(model) {
+            chain.push(model.clone());
+        }
+    }
+    chain
 }
 
 fn optional(key: &str) -> Option<String> {

@@ -84,6 +84,9 @@ pub async fn run(agent: Arc<Agent>, session_database_path: String) -> Result<(),
                     Ok(command) => command,
                     Err(error) => {
                         warn!(message_id = %context.info.id, error = %error, "WhatsApp voice-note download failed");
+                        if let Ok(result) = context.reply(error.user_message()).await {
+                            sent_message_ids.lock().await.insert(result.message_id);
+                        }
                         return;
                     }
                 };

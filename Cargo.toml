@@ -30,3 +30,6 @@ whatsapp-rust = { version = "0.7", default-features = false, features = ["sqlite
 
 [dev-dependencies]
 wiremock = "0.6"
+
+[profile.release]
+strip = true

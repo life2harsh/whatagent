@@ -99,9 +99,10 @@ impl GoogleCalendarClient {
         }
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AgentError::upstream(
+            return Err(AgentError::upstream_status(
                 "Google Calendar",
-                format!("{status}: {body}"),
+                status,
+                &body,
             ));
         }
         let event: EventResource = response

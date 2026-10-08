@@ -54,8 +54,8 @@ async fn main() -> anyhow::Result<()> {
         http.clone(),
         config.gemini_base_url.clone(),
         config.gemini_api_key.clone(),
-        config.gemini_text_model.clone(),
-        config.gemini_audio_model.clone(),
+        config.gemini_text_models.clone(),
+        config.gemini_audio_models.clone(),
     );
     let google_auth = ServiceAccountAuth::from_file(
         http.clone(),

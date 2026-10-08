@@ -199,9 +199,10 @@ fn service(server: &MockServer) -> CalendarService {
         http.clone(),
         url::Url::parse(&server.uri()).unwrap(),
         "gemini-key".to_owned(),
-        "text-model".to_owned(),
-        "audio-model".to_owned(),
-    );
+        vec!["text-model".to_owned(), "fallback-model".to_owned()],
+        vec!["audio-model".to_owned(), "fallback-model".to_owned()],
+    )
+    .with_retry_delay(std::time::Duration::ZERO);
     let calendar = GoogleCalendarClient::new(
         http,
         url::Url::parse(&format!("{}/calendar/v3", server.uri())).unwrap(),
@@ -337,11 +338,53 @@ async fn ambiguous_voice_note_needs_confirmation_without_creating_an_event() {
 }
 
 #[tokio::test]
-async fn upstream_errors_carry_the_google_message() {
+async fn overloaded_model_falls_back_to_the_next_one() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/text-model:generateContent"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("high demand"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/fallback-model:generateContent"))
+        .respond_with(gemini_reply(far_future_event()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/events$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "abc",
+            "summary": "Solve NPTEL assignment",
+            "start": { "dateTime": "2099-09-16T15:00:00+05:30" },
+            "end": { "dateTime": "2099-09-16T16:00:00+05:30" }
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let outcome = service(&server)
+        .handle(
+            "message-1",
+            ExtractionInput::Text("cal NPTEL wednesday 3pm".to_owned()),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(outcome, CalendarOutcome::Created { .. }));
+}
+
+#[tokio::test]
+async fn all_models_overloaded_retries_once_then_explains_plainly() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path_regex(r"generateContent$"))
-        .respond_with(ResponseTemplate::new(429).set_body_string("RESOURCE_EXHAUSTED"))
+        .respond_with(
+            ResponseTemplate::new(503)
+                .set_body_string(r#"{"error":{"code":503,"status":"UNAVAILABLE"}}"#),
+        )
+        .expect(4)
         .mount(&server)
         .await;
 
@@ -353,6 +396,61 @@ async fn upstream_errors_carry_the_google_message() {
         .await
         .unwrap_err();
 
-    assert!(error.to_string().contains("Gemini"));
-    assert!(error.to_string().contains("RESOURCE_EXHAUSTED"));
+    assert!(
+        error.to_string().contains("UNAVAILABLE"),
+        "logs keep the detail"
+    );
+    let reply = error.user_message();
+    assert!(reply.contains("overloaded"));
+    assert!(!reply.contains('{'), "no raw JSON in WhatsApp: {reply}");
+}
+
+#[tokio::test]
+async fn rejected_api_key_is_not_retried() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"generateContent$"))
+        .respond_with(ResponseTemplate::new(403).set_body_string("API_KEY_INVALID"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let error = service(&server)
+        .handle(
+            "message-1",
+            ExtractionInput::Text("cal lunch tomorrow".to_owned()),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.user_message().contains("GEMINI_API_KEY"));
+}
+
+#[tokio::test]
+async fn disabled_calendar_api_gets_a_plain_explanation() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/events$"))
+        .respond_with(ResponseTemplate::new(403).set_body_string(
+            r#"{"error":{"code":403,"message":"Google Calendar API has not been used in project 935404452 before or it is disabled."}}"#,
+        ))
+        .mount(&server)
+        .await;
+    let candidate = EventCandidate {
+        title: "Standup".to_owned(),
+        start: chrono::DateTime::parse_from_rfc3339("2099-09-16T10:00:00+05:30").unwrap(),
+        end: chrono::DateTime::parse_from_rfc3339("2099-09-16T10:15:00+05:30").unwrap(),
+        description: None,
+        location: None,
+        recurrence: None,
+    };
+
+    let error = service(&server)
+        .create("message-1", &candidate)
+        .await
+        .unwrap_err();
+
+    let reply = error.user_message();
+    assert!(reply.contains("Calendar API is turned off"), "{reply}");
+    assert!(!reply.contains('{'));
 }

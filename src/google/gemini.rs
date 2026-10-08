@@ -1,7 +1,10 @@
+use std::time::Duration;
+
 use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, FixedOffset};
 use serde::Deserialize;
 use serde_json::json;
+use tracing::warn;
 
 use crate::error::AgentError;
 
@@ -12,8 +15,9 @@ pub struct GeminiClient {
     http: reqwest::Client,
     base_url: url::Url,
     api_key: String,
-    text_model: String,
-    audio_model: String,
+    text_models: Vec<String>,
+    audio_models: Vec<String>,
+    retry_delay: Duration,
 }
 
 pub enum ExtractionInput {
@@ -83,27 +87,37 @@ impl GeminiClient {
         http: reqwest::Client,
         base_url: url::Url,
         api_key: String,
-        text_model: String,
-        audio_model: String,
+        text_models: Vec<String>,
+        audio_models: Vec<String>,
     ) -> Self {
         Self {
             http,
             base_url,
             api_key,
-            text_model,
-            audio_model,
+            text_models,
+            audio_models,
+            retry_delay: Duration::from_secs(3),
         }
     }
 
+    /// How long to wait before the second pass over the model list.
+    pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
+        self.retry_delay = retry_delay;
+        self
+    }
+
+    /// Tries each configured model in order, moving on when one is overloaded,
+    /// unavailable, or returns something unusable. After a full pass of
+    /// failures it waits briefly and makes one more pass.
     pub async fn extract_event(
         &self,
         input: ExtractionInput,
         context: &ExtractionContext,
     ) -> Result<ExtractedEvent, AgentError> {
-        let (model, user_parts) = match input {
-            ExtractionInput::Text(text) => (&self.text_model, json!([{ "text": text }])),
+        let (models, user_parts) = match input {
+            ExtractionInput::Text(text) => (&self.text_models, json!([{ "text": text }])),
             ExtractionInput::Audio { mime_type, data } => (
-                &self.audio_model,
+                &self.audio_models,
                 json!([
                     { "text": "The request is in this WhatsApp voice note." },
                     {
@@ -125,19 +139,44 @@ impl GeminiClient {
             },
         });
 
+        let mut last_error = None;
+        for round in 0..2 {
+            if round > 0 {
+                tokio::time::sleep(self.retry_delay).await;
+            }
+            for model in models {
+                match self.generate(model, &body).await {
+                    Ok(event) => return Ok(event),
+                    Err(error) if worth_another_model(&error) => {
+                        warn!(%model, round, %error, "Gemini attempt failed; trying the next model");
+                        last_error = Some(error);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| AgentError::Config("no Gemini models are configured".to_owned())))
+    }
+
+    async fn generate(
+        &self,
+        model: &str,
+        body: &serde_json::Value,
+    ) -> Result<ExtractedEvent, AgentError> {
         let mut url = self.base_url.clone();
         url.set_path(&format!("/v1beta/models/{model}:generateContent"));
         let response = self
             .http
             .post(url)
             .header("x-goog-api-key", &self.api_key)
-            .json(&body)
+            .json(body)
             .send()
             .await?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AgentError::upstream("Gemini", format!("{status}: {body}")));
+            return Err(AgentError::upstream_status("Gemini", status, &body));
         }
         let response: GenerateContentResponse = response
             .json()
@@ -167,6 +206,19 @@ impl GeminiClient {
             )
         })
     }
+}
+
+/// Transient failures, unknown model names (404), and unusable replies can
+/// all succeed on a different model; a rejected API key or bad request cannot.
+fn worth_another_model(error: &AgentError) -> bool {
+    error.is_transient()
+        || matches!(
+            error,
+            AgentError::Upstream {
+                status: None | Some(404),
+                ..
+            }
+        )
 }
 
 fn system_prompt(context: &ExtractionContext) -> String {

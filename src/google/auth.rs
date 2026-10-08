@@ -143,10 +143,7 @@ impl AccessTokenSource for ServiceAccountAuth {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            return Err(AgentError::upstream(
-                "Google auth",
-                format!("{status}: {body}"),
-            ));
+            return Err(AgentError::upstream_status("Google auth", status, &body));
         }
         let token: TokenResponse = response
             .json()
