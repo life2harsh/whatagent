@@ -63,12 +63,7 @@ impl GoogleCalendarClient {
         candidate: &EventCandidate,
         timezone: &str,
     ) -> Result<InsertOutcome, AgentError> {
-        let mut url = self.base_url.clone();
-        url.path_segments_mut()
-            .map_err(|_| AgentError::Config("Google Calendar base URL is invalid".to_owned()))?
-            .pop_if_empty()
-            .extend(["calendars", &self.calendar_id, "events"]);
-
+        let url = self.events_url()?;
         let mut body = json!({
             "id": event_id,
             "summary": candidate.title,
@@ -117,6 +112,34 @@ impl GoogleCalendarClient {
             calendar: self.calendar_id.clone(),
             html_url: event.html_link,
         }))
+    }
+
+    /// Confirms the service account can see events on the calendar, which
+    /// fails the same way an insert would when the calendar isn't shared.
+    pub async fn check_access(&self) -> Result<(), AgentError> {
+        let mut url = self.events_url()?;
+        url.query_pairs_mut().append_pair("maxResults", "1");
+        let token = self.tokens.access_token().await?;
+        let response = self.http.get(url).bearer_auth(token).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AgentError::upstream_status(
+                "Google Calendar",
+                status,
+                &body,
+            ));
+        }
+        Ok(())
+    }
+
+    fn events_url(&self) -> Result<url::Url, AgentError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .map_err(|_| AgentError::Config("Google Calendar base URL is invalid".to_owned()))?
+            .pop_if_empty()
+            .extend(["calendars", &self.calendar_id, "events"]);
+        Ok(url)
     }
 }
 

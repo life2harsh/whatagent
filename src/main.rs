@@ -26,8 +26,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Link WhatsApp and print the OWNER_JID for your self-chat.
     Pair,
+    /// Run the daemon.
     Run,
+    /// Verify the Gemini key and Google Calendar access, then exit.
+    Check,
+    /// Process one message as if it came from the self-chat (creates a real event).
     TestCalendar { text: String },
 }
 
@@ -68,6 +73,9 @@ async fn main() -> anyhow::Result<()> {
         config.google_calendar_id.clone(),
         Arc::new(google_auth),
     );
+    if matches!(&cli.command, Command::Check) {
+        return check(&gemini, &google_calendar, &config.google_calendar_id).await;
+    }
     let calendar = CalendarService::new(
         gemini,
         google_calendar,
@@ -85,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
     let agent = Arc::new(Agent::new(config, calendar, keep, store));
 
     match cli.command {
-        Command::Pair => unreachable!(),
+        Command::Pair | Command::Check => unreachable!(),
         Command::Run => {
             if agent.google_keep_sync_enabled() {
                 let keep_agent = Arc::clone(&agent);
@@ -113,6 +121,35 @@ async fn main() -> anyhow::Result<()> {
                 wa_calendar_agent::app::ProcessOutcome::Reply(message) => println!("{message}"),
             }
         }
+    }
+    Ok(())
+}
+
+async fn check(
+    gemini: &GeminiClient,
+    calendar: &GoogleCalendarClient,
+    calendar_id: &str,
+) -> anyhow::Result<()> {
+    let mut failed = false;
+    match gemini.check().await {
+        Ok(model) => println!("ok    Gemini API key works ({model})"),
+        Err(error) => {
+            failed = true;
+            println!("FAIL  Gemini: {}\n      {error}", error.user_message());
+        }
+    }
+    match calendar.check_access().await {
+        Ok(()) => println!("ok    Google Calendar access to {calendar_id}"),
+        Err(error) => {
+            failed = true;
+            println!(
+                "FAIL  Google Calendar: {}\n      {error}",
+                error.user_message()
+            );
+        }
+    }
+    if failed {
+        anyhow::bail!("setup check failed");
     }
     Ok(())
 }

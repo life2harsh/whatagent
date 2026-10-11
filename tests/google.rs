@@ -454,3 +454,73 @@ async fn disabled_calendar_api_gets_a_plain_explanation() {
     assert!(reply.contains("Calendar API is turned off"), "{reply}");
     assert!(!reply.contains('{'));
 }
+
+fn clients(server: &MockServer) -> (GeminiClient, GoogleCalendarClient) {
+    let http = reqwest::Client::new();
+    let gemini = GeminiClient::new(
+        http.clone(),
+        url::Url::parse(&server.uri()).unwrap(),
+        "gemini-key".to_owned(),
+        vec!["text-model".to_owned()],
+        vec!["text-model".to_owned()],
+    );
+    let calendar = GoogleCalendarClient::new(
+        http,
+        url::Url::parse(&format!("{}/calendar/v3", server.uri())).unwrap(),
+        "me@example.com".to_owned(),
+        Arc::new(StaticToken("calendar-token".to_owned())),
+    );
+    (gemini, calendar)
+}
+
+#[tokio::test]
+async fn setup_check_passes_with_a_working_key_and_shared_calendar() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1beta/models/text-model"))
+        .and(header("x-goog-api-key", "gemini-key"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/calendar/v3/calendars/me@example.com/events"))
+        .and(header("authorization", "Bearer calendar-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (gemini, calendar) = clients(&server);
+    assert_eq!(gemini.check().await.unwrap(), "text-model");
+    calendar.check_access().await.unwrap();
+}
+
+#[tokio::test]
+async fn setup_check_explains_a_bad_key_and_an_unshared_calendar() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1beta/models/text-model"))
+        .respond_with(ResponseTemplate::new(400).set_body_string(
+            r#"{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}"#,
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"/events$"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_string(r#"{"error":{"code":404,"message":"Not Found"}}"#),
+        )
+        .mount(&server)
+        .await;
+
+    let (gemini, calendar) = clients(&server);
+    let gemini_error = gemini.check().await.unwrap_err().user_message();
+    assert!(gemini_error.contains("GEMINI_API_KEY"), "{gemini_error}");
+    let calendar_error = calendar.check_access().await.unwrap_err().user_message();
+    assert!(
+        calendar_error.contains("shared with the service account"),
+        "{calendar_error}"
+    );
+}

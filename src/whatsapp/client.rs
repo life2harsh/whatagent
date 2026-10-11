@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use whatsapp_rust::{
@@ -16,6 +16,7 @@ use whatsapp_rust::{
 
 use crate::{
     app::{Agent, ProcessOutcome},
+    commands::is_owner_jids,
     db::StateStore,
     error::AgentError,
     whatsapp::normalize::normalize,
@@ -162,10 +163,15 @@ fn print_qr_code(payload: &str) {
     }
 }
 
+/// Links the device (printing a QR code when needed), then waits for a message
+/// the owner sends to their own chat and prints the exact `OWNER_JID=` line to
+/// use. That JID can differ from the account's phone-number and LID JIDs.
 pub async fn pair(session_database_path: String) -> Result<(), AgentError> {
     let store = SqliteStore::new(&session_database_path)
         .await
         .map_err(|error| AgentError::Config(format!("WhatsApp session store failed: {error}")))?;
+    let (found_tx, found_rx) = oneshot::channel::<String>();
+    let found_tx = Arc::new(std::sync::Mutex::new(Some(found_tx)));
     let bot = Bot::builder()
         .with_backend(store)
         .on_qr_code(|code, timeout| async move {
@@ -178,18 +184,43 @@ pub async fn pair(session_database_path: String) -> Result<(), AgentError> {
         .on_connected(|client| async move {
             let pn_jid = client.pn().map(|jid| jid.to_string());
             let lid_jid = client.lid().map(|jid| jid.to_string());
-            info!(
-                ?pn_jid,
-                ?lid_jid,
-                "WhatsApp paired; choose the self-chat identity for OWNER_JID"
-            );
+            info!(?pn_jid, ?lid_jid, "WhatsApp paired");
+            println!("WhatsApp is linked. Now send any message to yourself (\"Message yourself\" chat) to finish setup.");
         })
         .on_logged_out(|_| async move {
             warn!("WhatsApp logged out; re-pairing is required");
         })
+        .on_message(move |context| {
+            let found_tx = Arc::clone(&found_tx);
+            async move {
+                let source = &context.info.source;
+                let chat_id = source.chat.to_string();
+                let sender_id = source.sender.to_string();
+                if source.is_from_me
+                    && !source.is_group
+                    && is_owner_jids(&chat_id, &sender_id, &chat_id)
+                {
+                    if let Some(sender) = found_tx.lock().ok().and_then(|mut slot| slot.take()) {
+                        let _ = sender.send(chat_id);
+                    }
+                }
+            }
+        })
         .build()
         .await
         .map_err(|error| AgentError::Config(format!("WhatsApp client setup failed: {error}")))?;
-    bot.run().await;
+    let client = bot.client();
+    let run = bot.run();
+    tokio::pin!(run);
+    tokio::select! {
+        () = &mut run => {}
+        found = found_rx => {
+            if let Ok(owner_jid) = found {
+                println!("OWNER_JID={owner_jid}");
+                client.disconnect().await;
+            }
+            run.await;
+        }
+    }
     Ok(())
 }

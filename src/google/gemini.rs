@@ -159,6 +159,28 @@ impl GeminiClient {
             .unwrap_or_else(|| AgentError::Config("no Gemini models are configured".to_owned())))
     }
 
+    /// Confirms the API key is accepted and the primary text model exists.
+    pub async fn check(&self) -> Result<String, AgentError> {
+        let model = self
+            .text_models
+            .first()
+            .ok_or_else(|| AgentError::Config("no Gemini models are configured".to_owned()))?;
+        let mut url = self.base_url.clone();
+        url.set_path(&format!("/v1beta/models/{model}"));
+        let response = self
+            .http
+            .get(url)
+            .header("x-goog-api-key", &self.api_key)
+            .send()
+            .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AgentError::upstream_status("Gemini", status, &body));
+        }
+        Ok(model.clone())
+    }
+
     async fn generate(
         &self,
         model: &str,

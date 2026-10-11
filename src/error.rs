@@ -64,6 +64,13 @@ impl AgentError {
             Self::Upstream {
                 service: "Gemini",
                 status: Some(400),
+                message,
+            } if message.contains("API_KEY_INVALID") || message.contains("API key not valid") => {
+                "Gemini rejected the API key. Check GEMINI_API_KEY on the server."
+            }
+            Self::Upstream {
+                service: "Gemini",
+                status: Some(400),
                 ..
             } => "Gemini couldn't process that message. Try rephrasing it.",
             Self::Upstream {
@@ -71,6 +78,11 @@ impl AgentError {
                 status: Some(401 | 403),
                 ..
             } => "Gemini rejected the API key. Check GEMINI_API_KEY on the server.",
+            Self::Upstream {
+                service: "Gemini",
+                status: Some(404),
+                ..
+            } => "That Gemini model doesn't exist. Check GEMINI_MODEL on the server.",
             Self::Upstream {
                 service: "Gemini",
                 status: None,
