@@ -15,3 +15,6 @@ keep-bridge/venv/
 
 # Local cross-compilation toolchain.
 .local-cross/
+
+# Python bytecode.
+__pycache__/

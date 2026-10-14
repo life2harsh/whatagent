@@ -1,0 +1,51 @@
+name: Release
+
+# Push a tag like v0.2.0 to build Linux binaries and publish a GitHub release.
+# deploy/install.sh downloads the latest one.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Built on 22.04 so the binaries run on glibc 2.35+ (Ubuntu 22.04+, Debian 12+).
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.arch }}
+      - run: cargo build --release --locked
+      - name: Package
+        run: |
+          dir=wa-calendar-agent-${{ matrix.arch }}-linux
+          mkdir "$dir"
+          cp target/release/wa-calendar-agent deploy/install.sh deploy/wa-calendar-agent.service .env.example "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}
+          path: wa-calendar-agent-*.tar.gz*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes wa-calendar-agent-*
+        env:
+          GH_TOKEN: ${{ github.token }}

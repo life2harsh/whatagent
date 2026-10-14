@@ -12,14 +12,14 @@ A service account signs its own short-lived tokens, so there is no OAuth consent
 
 1. In Google Cloud Console, enable the **Google Calendar API** for your project.
 2. IAM & Admin → Service Accounts → **Create service account** (no roles needed).
-3. Open it → Keys → Add key → **JSON**. Copy the file to the server, owner-readable only:
+3. Open it → Keys → Add key → **JSON**. Pass the downloaded file to the installer with `--service-account` (see "Deploying to a VPS" in the README), or install it by hand, owner-readable only:
 
    ```bash
    sudo install -m 0600 -o wa-calendar -g wa-calendar service-account.json /opt/wa-calendar-agent/service-account.json
    ```
 
 4. In Google Calendar → Settings → your calendar → **Share with specific people**, add the service account's `client_email` with **Make changes to events**.
-5. Set `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` to the key file and `GOOGLE_CALENDAR_ID` to the calendar ID (your Gmail address for your main calendar; other calendars show it under "Integrate calendar").
+5. The installer asks for the rest. For a manual setup, set `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` to the key file and `GOOGLE_CALENDAR_ID` to the calendar ID (your Gmail address for your main calendar; other calendars show it under "Integrate calendar").
 
 Events are created with an ID derived from the WhatsApp message ID, so a replayed or retried message can never create a duplicate. Service accounts cannot invite attendees on personal calendars; this agent does not need to.
 

@@ -26,13 +26,13 @@ cargo run -- run
 
 The QR code is printed to standard output only during initial pairing. `WHATSAPP_SESSION_DATABASE_PATH` persists the linked-device state so it is reused on restart. Treat that file as a credential and keep it owner-readable only.
 
-After pairing, the startup log prints both the account phone-number JID and LID JID. Start with the phone-number JID for `OWNER_JID`, then send a self-chat test. If it is ignored, use the LID shown in the same connection log and restart.
-
-To pair and discover the two JIDs before configuring Google, set only `WHATSAPP_SESSION_DATABASE_PATH` and run:
+To link WhatsApp and find your `OWNER_JID`, set only `WHATSAPP_SESSION_DATABASE_PATH` and run the command below. After scanning the QR code, send yourself any message; the command prints the exact `OWNER_JID=` line to use and exits.
 
 ```bash
 cargo run -- pair
 ```
+
+`cargo run -- check` verifies the Gemini key and Google Calendar access without sending anything.
 
 Run checks with:
 
@@ -68,28 +68,85 @@ The connected daemon checks due reminders every `REMINDER_POLL_SECONDS` seconds,
 
 Agenda text, notes, and other supplied event details become the Google Calendar description. Explicit recurring requests are supported through validated RFC 5545 rules. For example, `cal add a recurring event every Wednesday at 3pm to solve the NPTEL assignment` becomes a weekly Wednesday event. Vague repetition is rejected rather than silently creating an incorrect series. When the time itself is vague, the agent replies with its best reading and waits for `yes` or `no`. Messages that are clearly not calendar requests are declined.
 
-## VPS installation
+## Deploying to a VPS
+
+Any Linux server with systemd works, including the cheapest VPS tier. Prebuilt binaries cover x86_64 and ARM64 with glibc 2.35+ (Ubuntu 22.04+, Debian 12+).
+
+Before you start, you need:
+
+- a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey);
+- a Google service account JSON key (see `docs/GOOGLE_SETUP.md`; it takes about two minutes).
+
+### One command on the server
+
+Copy the key to the server, then run the installer there:
 
 ```bash
-sudo useradd --system --home /opt/wa-calendar-agent --shell /usr/sbin/nologin wa-calendar
-sudo install -d -o wa-calendar -g wa-calendar /opt/wa-calendar-agent
-sudo install -m 0755 target/release/wa-calendar-agent /opt/wa-calendar-agent/wa-calendar-agent
-sudo install -m 0600 -o wa-calendar -g wa-calendar .env /etc/wa-calendar-agent.env
-sudo install -m 0644 deploy/wa-calendar-agent.service /etc/systemd/system/wa-calendar-agent.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now wa-calendar-agent
+scp service-account.json you@your-server:
+ssh you@your-server
+curl -fsSL https://raw.githubusercontent.com/life2harsh/whatagent/main/deploy/install.sh | sudo bash -s -- --service-account ~/service-account.json
 ```
 
-The included service is deliberately capped at 25% CPU and 512 MB memory so it remains a lightweight tenant on the VPS. Build releases with a separate CPU/memory-capped build service rather than compiling unrestricted on the server.
+The installer:
 
-Install the service account key as `/opt/wa-calendar-agent/service-account.json` (mode `0600`, owned by `wa-calendar`). For Keep sync, also install `deploy/keep-bridge.service` as described in `docs/GOOGLE_SETUP.md`.
+1. downloads the latest release for your CPU and checks its checksum;
+2. creates the `wa-calendar` user and `/opt/wa-calendar-agent`, and installs the systemd service;
+3. asks for your Gemini key (it checks the key works), calendar ID and timezone;
+4. shows who to share your calendar with, then tests Gemini and Calendar access;
+5. prints a QR code: link it under WhatsApp > Settings > Linked devices;
+6. asks you to send yourself one message, which tells it your `OWNER_JID`;
+7. starts the service and waits until it's connected.
+
+You can delete `~/service-account.json` afterwards; the installer keeps its own copy, readable only by the service.
+
+### Or from your own machine
+
+`deploy/deploy.sh` does the same over SSH, uploading the key for you:
+
+```bash
+deploy/deploy.sh you@your-server --service-account ./service-account.json
+deploy/deploy.sh you@your-server -i ~/.ssh/my-key     # upgrade later
+```
+
+Add `--binary path/to/wa-calendar-agent` to deploy a binary you built yourself instead of a release.
+
+### Upgrading and changing settings
+
+Re-run the same command to upgrade. Settings, the WhatsApp session and your tasks are kept, the previous binary is backed up next to the new one, and the rollback command is printed at the end. Other options:
+
+| Option | Effect |
+| --- | --- |
+| `--version v0.2.0` | Install a specific release instead of the latest. |
+| `--reconfigure` | Ask for the Gemini key, calendar, timezone and service account again. |
+| `--relink` | Unlink and show a new WhatsApp QR code. |
+
+Settings live in `/etc/wa-calendar-agent.env` (after editing it, run `sudo systemctl restart wa-calendar-agent`). Useful commands:
+
+```bash
+journalctl -u wa-calendar-agent -f                         # logs
+sudo systemctl restart wa-calendar-agent                   # restart
+sudo -u wa-calendar sh -c 'set -a; . /etc/wa-calendar-agent.env; /opt/wa-calendar-agent/wa-calendar-agent check'
+```
+
+The service is capped at 25% CPU and 512 MB of memory, so it can share a small VPS with other services. For Keep sync, also install `deploy/keep-bridge.service` as described in `docs/GOOGLE_SETUP.md`.
+
+### Publishing releases
+
+The installer downloads binaries from this repository's GitHub releases, so the repository must be public. Push a version tag to build and publish them:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+`.github/workflows/release.yml` builds x86_64 and ARM64 binaries and attaches them to the release. Forks can point the installer at their own releases with `WA_REPO=owner/repo`.
 
 ## Full-pipeline checklist
 
 - [ ] The service account's email has "Make changes to events" on `GOOGLE_CALENDAR_ID`.
 - [ ] `cargo run -- test-calendar "cal test event tomorrow at 6pm"` returns a created result.
 - [ ] A deliberately vague request asks for confirmation, and `yes` creates exactly one Calendar event.
-- [ ] Set `OWNER_JID` to the exact canonical JID shown by WhatsApp pairing diagnostics.
+- [ ] Set `OWNER_JID` to the `OWNER_JID=` line printed by `wa-calendar-agent pair` (the installer does this for you).
 - [ ] Run `cargo run -- run`, scan the QR code, and verify a session database is created with restrictive permissions.
 - [ ] Send `cal test event tomorrow at 6pm` from the linked account's self-chat and receive one concise reply.
 - [ ] Send a real voice note and verify one Calendar event and one WhatsApp confirmation.
