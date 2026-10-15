@@ -256,6 +256,35 @@ impl Agent {
         let reply = match outcome {
             CalendarOutcome::Created { message, .. }
             | CalendarOutcome::AlreadyAdded { message } => message,
+            CalendarOutcome::Task {
+                title,
+                notes,
+                due_at,
+                remind_at,
+                heard,
+            } => {
+                let task = self
+                    .store
+                    .create_task(NewTask {
+                        chat_id: command.chat_id.clone(),
+                        title,
+                        notes,
+                        due_at,
+                        remind_at,
+                        source_message_id: command.message_id.clone(),
+                    })
+                    .await?;
+                let synced = self.sync_google_keep_notes().await?;
+                format!(
+                    "{heard}{}",
+                    format_task_created(
+                        &task,
+                        self.config.timezone,
+                        self.keep.is_some(),
+                        synced > 0
+                    )
+                )
+            }
             CalendarOutcome::Error { message } => {
                 format!("Couldn't add that to Calendar: {message}")
             }
@@ -300,9 +329,9 @@ fn format_task_created(
     }
     if keep_enabled {
         message.push_str(if keep_synced {
-            "\nSynced to Google Keep."
+            "\nAdded to your Google Keep list."
         } else {
-            "\nGoogle Keep sync pending."
+            "\nGoogle Keep list sync pending."
         });
     }
     message
@@ -316,7 +345,7 @@ fn format_task_list(tasks: &[Task], timezone: chrono_tz::Tz) -> String {
     for task in tasks {
         let due = task
             .due_at
-            .map(|time| format!(" — due {}", format_time(time, timezone)))
+            .map(|time| format!(" (due {})", format_time(time, timezone)))
             .unwrap_or_default();
         lines.push(format!("{}. {}{}", task.id, task.title, due));
     }

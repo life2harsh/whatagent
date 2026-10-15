@@ -47,6 +47,8 @@ fn extracted(start: &str, end: &str) -> ExtractedEvent {
         needs_confirmation: false,
         ambiguity_reason: None,
         transcript: None,
+        due: None,
+        remind: None,
     }
 }
 
@@ -334,6 +336,99 @@ async fn ambiguous_voice_note_needs_confirmation_without_creating_an_event() {
         outcome,
         CalendarOutcome::NeedsConfirmation { request_id, message, .. }
             if request_id == "voice-1" && message.contains("Heard: \"NPTEL on Wednesday evening\"")
+    ));
+}
+
+#[tokio::test]
+async fn voice_note_can_create_a_task_instead_of_an_event() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/audio-model:generateContent"))
+        .and(body_string_contains("inlineData"))
+        .respond_with(gemini_reply(serde_json::json!({
+            "intent": "create_task",
+            "confidence": 0.95,
+            "title": "Buy milk",
+            "description": "two litres",
+            "start": null, "end": null, "location": null, "recurrence": null,
+            "needs_confirmation": false, "ambiguity_reason": null,
+            "transcript": "remind me to buy milk tomorrow at 6pm",
+            "due": null,
+            "remind": "2099-09-17T18:00:00+05:30"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // A task must not hit the Calendar API.
+    Mock::given(method("POST"))
+        .and(path_regex(r"/events$"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let outcome = service(&server)
+        .handle(
+            "voice-task-1",
+            ExtractionInput::Audio {
+                mime_type: Some("audio/ogg; codecs=opus".to_owned()),
+                data: b"voice-note".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let CalendarOutcome::Task {
+        title,
+        notes,
+        due_at,
+        remind_at,
+        heard,
+    } = outcome
+    else {
+        panic!("expected a task, got something else");
+    };
+    assert_eq!(title, "Buy milk");
+    assert_eq!(notes.as_deref(), Some("two litres"));
+    assert_eq!(due_at, None);
+    assert_eq!(
+        remind_at,
+        Some(
+            chrono::DateTime::parse_from_rfc3339("2099-09-17T18:00:00+05:30")
+                .unwrap()
+                .to_utc()
+        )
+    );
+    assert!(heard.contains("remind me to buy milk"));
+}
+
+#[tokio::test]
+async fn a_task_reminder_in_the_past_is_dropped() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/text-model:generateContent"))
+        .respond_with(gemini_reply(serde_json::json!({
+            "intent": "create_task",
+            "confidence": 0.95,
+            "title": "File taxes",
+            "description": null,
+            "start": null, "end": null, "location": null, "recurrence": null,
+            "needs_confirmation": false, "ambiguity_reason": null, "transcript": null,
+            "due": null,
+            "remind": "2000-01-01T09:00:00+05:30"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let outcome = service(&server)
+        .handle("task-past", ExtractionInput::Text("file taxes".to_owned()))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        CalendarOutcome::Task { remind_at: None, heard, .. } if heard.is_empty()
     ));
 }
 

@@ -9,7 +9,7 @@ use crate::{
     error::AgentError,
     google::{
         calendar::{event_id_for, GoogleCalendarClient, InsertOutcome},
-        gemini::{ExtractionContext, ExtractionInput, GeminiClient},
+        gemini::{ExtractedEvent, ExtractionContext, ExtractionInput, GeminiClient},
     },
 };
 
@@ -55,6 +55,10 @@ impl CalendarService {
             .filter(|transcript| !transcript.is_empty())
             .map(|transcript| format!("Heard: \"{transcript}\"\n"))
             .unwrap_or_default();
+
+        if extracted.intent == "create_task" {
+            return Ok(build_task(&extracted, heard, now));
+        }
 
         match validate(&extracted, now) {
             Validation::Ready(candidate) => self.create(message_id, &candidate).await,
@@ -125,4 +129,34 @@ pub(crate) fn format_time<T: TimeZone>(time: DateTime<T>, timezone: Tz) -> Strin
     time.with_timezone(&timezone)
         .format("%-d %b, %-I:%M %p")
         .to_string()
+}
+
+/// Turns a create_task extraction into a task outcome for the agent to store.
+/// A reminder time in the past is dropped rather than firing immediately.
+fn build_task(extracted: &ExtractedEvent, heard: String, now: DateTime<Utc>) -> CalendarOutcome {
+    let Some(title) = non_empty(extracted.title.as_deref()) else {
+        return CalendarOutcome::Error {
+            message: format!("{heard}I couldn't tell what the task should be. Try again."),
+        };
+    };
+    CalendarOutcome::Task {
+        title,
+        notes: non_empty(extracted.description.as_deref()),
+        due_at: parse_utc(extracted.due.as_deref()),
+        remind_at: parse_utc(extracted.remind.as_deref()).filter(|time| *time > now),
+        heard,
+    }
+}
+
+fn non_empty(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_utc(value: Option<&str>) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value?.trim())
+        .ok()
+        .map(|time| time.with_timezone(&Utc))
 }

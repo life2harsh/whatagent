@@ -56,6 +56,12 @@ pub struct ExtractedEvent {
     pub ambiguity_reason: Option<String>,
     #[serde(default)]
     pub transcript: Option<String>,
+    /// RFC 3339 deadline for a task (intent create_task), if the user gave one.
+    #[serde(default)]
+    pub due: Option<String>,
+    /// RFC 3339 time to remind for a task (intent create_task), if requested.
+    #[serde(default)]
+    pub remind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,17 +254,25 @@ fn system_prompt(context: &ExtractionContext) -> String {
         "Current date and time: {current_time}\n\
          User timezone: {timezone}\n\
          Default event duration: {duration} minutes\n\n\
-         Convert the user's request into exactly one Google Calendar event. Do not invent details. \
-         If the message is clearly not a request to schedule something (for example a bare link or a random note), \
-         set intent to not_a_calendar_request. \
-         Put any agenda, note, details, or content supplied by the user in description. \
-         If the user explicitly requests repetition and the cadence is clear, set recurrence to an RFC 5545 rule \
-         without the RRULE: prefix, for example FREQ=WEEKLY;BYDAY=WE. Otherwise set recurrence to null. \
+         Read the user's request and choose one intent. Do not invent details. \
+         create_calendar_event: a meeting or event at a specific time, for example \"dentist at 5pm\" \
+         or \"call with Sam Friday 2pm\". Fill in title, start, end, and the other event fields. \
+         If a start time exists but an end time is absent, use the default duration. \
          If time is uncertain or vague, set needs_confirmation to true and explain why in ambiguity_reason, \
          but still fill in your best guess for start and end. \
-         If a start time exists but an end time is absent, use the default duration. \
+         If the user explicitly requests repetition and the cadence is clear, set recurrence to an RFC 5545 rule \
+         without the RRULE: prefix, for example FREQ=WEEKLY;BYDAY=WE. Otherwise set recurrence to null. \
+         create_task: any to-do, errand, shopping item, or thing to remember that is not tied to a specific \
+         meeting time, even when no time is given, for example \"buy earbuds\", \"remind me to buy milk\", or \
+         \"submit the report by Friday\". A short imperative or action item is a task. Put a short task name in \
+         title and any details in description. Set due only if the user gave a deadline, and remind only if the \
+         user wants to be reminded at a time; otherwise leave both null. Leave start, end, location, and \
+         recurrence null. \
+         not_a_calendar_request: only when the message is neither an event nor a to-do, for example a bare link, \
+         a greeting, a question, or a plain statement with nothing to do. When a message is actionable but you \
+         are unsure whether it is an event or a task, prefer create_task. \
          Resolve relative dates using the supplied current time and timezone. \
-         start and end must be RFC 3339 timestamps with a timezone offset. \
+         All times (start, end, due, remind) must be RFC 3339 timestamps with a timezone offset. \
          If the request is a voice note, put the verbatim transcript in transcript; otherwise set transcript to null.",
         current_time = context.current_time.to_rfc3339(),
         timezone = context.timezone,
@@ -271,9 +285,9 @@ fn response_schema() -> serde_json::Value {
     json!({
         "type": "OBJECT",
         "properties": {
-            "intent": { "type": "STRING", "enum": ["create_calendar_event", "not_a_calendar_request"] },
+            "intent": { "type": "STRING", "enum": ["create_calendar_event", "create_task", "not_a_calendar_request"] },
             "confidence": { "type": "NUMBER", "description": "0 to 1" },
-            "title": nullable_string("Short event title"),
+            "title": nullable_string("Short event or task title"),
             "description": nullable_string("Agenda or details supplied by the user"),
             "start": nullable_string("RFC 3339 timestamp with timezone offset"),
             "end": nullable_string("RFC 3339 timestamp with timezone offset"),
@@ -282,14 +296,16 @@ fn response_schema() -> serde_json::Value {
             "needs_confirmation": { "type": "BOOLEAN" },
             "ambiguity_reason": nullable_string("Why the request is ambiguous"),
             "transcript": nullable_string("Verbatim transcript for voice notes"),
+            "due": nullable_string("RFC 3339 deadline for a task, if the user gave one"),
+            "remind": nullable_string("RFC 3339 time to remind for a task, if requested"),
         },
         "required": [
             "intent", "confidence", "title", "description", "start", "end", "location",
-            "recurrence", "needs_confirmation", "ambiguity_reason", "transcript"
+            "recurrence", "needs_confirmation", "ambiguity_reason", "transcript", "due", "remind"
         ],
         "propertyOrdering": [
             "intent", "transcript", "title", "description", "start", "end", "location",
-            "recurrence", "needs_confirmation", "ambiguity_reason", "confidence"
+            "recurrence", "due", "remind", "needs_confirmation", "ambiguity_reason", "confidence"
         ],
     })
 }

@@ -1,4 +1,4 @@
-use chrono::{DateTime, FixedOffset};
+use chrono::{DateTime, FixedOffset, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,6 +6,15 @@ pub enum CalendarOutcome {
     Created {
         event: CalendarEvent,
         message: String,
+    },
+    /// The model read the request as a to-do; the agent creates the task.
+    Task {
+        title: String,
+        notes: Option<String>,
+        due_at: Option<DateTime<Utc>>,
+        remind_at: Option<DateTime<Utc>>,
+        /// "Heard: ..." line for voice notes, empty otherwise.
+        heard: String,
     },
     /// The event was already created for this message (a replay or retry).
     AlreadyAdded {
