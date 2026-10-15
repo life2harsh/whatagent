@@ -32,8 +32,7 @@ a voice note about going back to college turns into a calendar event (after a qu
   <img src="docs/screenshots/keep-checklist.png" alt="the WhatsApp Todos checklist in google keep" width="260">
 </p>
 
-<!-- paste the github.com/user-attachments/assets/... link for whatagent-demo.mp4 on its own line below this comment -->
-
+https://github.com/user-attachments/assets/96357914-06af-41dc-8b21-0f80a32008cb
 
 ## how it works
 
