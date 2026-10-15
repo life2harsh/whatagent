@@ -1,59 +1,122 @@
-# wa-calendar-agent
+# whatagent
 
-A small Rust daemon for turning text messages and voice notes sent to a WhatsApp self-chat into Google Calendar events, with tasks, reminders, and optional Google Keep sync.
+text yourself on whatsapp, and it ends up in your google calendar or your todo list. voice notes work too.
 
-## Scope
+## why this exists
 
-Only a configured owner self-chat is eligible for processing. The adapter uses `whatsapp-rust` 0.7 with persistent SQLite session storage. Messages and voice notes are parsed by Gemini, which decides whether the request is a calendar event or a task, then it is validated in Rust and either created in Google Calendar through a service account or stored as a task. A voice note like "remind me to buy milk tomorrow at 6pm" becomes a task (and, when Keep sync is on, a Keep note); one like "dentist tomorrow at 5" becomes a calendar event. Voice notes are downloaded and decrypted by the WhatsApp client and sent to Gemini inline.
+i wanted something like the Essential Space on Nothing phones: throw a thought somewhere and get it back when it matters. my sticky notes weren't on the cloud, and i forget a lot of stuff, so i built this.
 
-## Local development
+funny enough, i now have a Nothing phone with Essential Space on it. i still use this though. whatsapp is open all day anyway, and texting yourself is about the lowest-effort way to keep track of things.
 
-1. Copy `.env.example` to `.env` and fill every required value.
-2. Set up Gemini and the Google Calendar service account as described in `docs/GOOGLE_SETUP.md`.
-3. Run the command below.
+## what it does
 
-```bash
-cargo run -- test-calendar "cal OSDC meeting tomorrow at 6pm"
+- "dentist tomorrow at 5" goes straight into google calendar
+- "buy earbuds" or "remind me to call abhinav at 6" becomes a todo, and you get a whatsapp reminder when it's time
+- voice notes work exactly like text, so you can just talk
+- todos can also land on one google keep checklist ("WhatsApp Todos"), if you set that up
+- repeating stuff works: "every wednesday at 3pm, nptel assignment" becomes a weekly event
+- if a time is vague, it tells you what it understood and waits for a yes or no
+- it only listens to your own self-chat (message yourself) and ignores every other chat
+
+## see it in action
+
+a voice note about going back to college turns into a calendar event (after a quick yes), a typed "buy GaN charger for phone" turns into a todo, and both show up in google calendar and on the keep checklist.
+
+<p align="center">
+  <img src="docs/screenshots/chat-todos.png" alt="voice notes and texts in the self-chat turning into todos and a calendar event" width="320">
+  <img src="docs/screenshots/chat-confirm.png" alt="a vague date gets a yes or no check before it's added, then a todo is added to keep" width="320">
+</p>
+<p align="center">
+  <img src="docs/screenshots/calendar-event.png" alt="the event in google calendar, created by the agent" width="260">
+  <img src="docs/screenshots/home-widgets.png" alt="calendar and keep checklist widgets on the home screen" width="260">
+  <img src="docs/screenshots/keep-checklist.png" alt="the WhatsApp Todos checklist in google keep" width="260">
+</p>
+
+<!-- paste the github.com/user-attachments/assets/... link for whatagent-demo.mp4 on its own line below this comment -->
+
+
+## how it works
+
+```text
+your self-chat -> whatsapp (linked device) -> gemini (event or todo?) -> checks in rust -> google calendar, or your todo list (+ google keep)
 ```
 
-The command writes state to `DATABASE_URL`, calls Gemini and Google Calendar, and prints the reply the WhatsApp adapter would send to the self-chat. It creates a real event.
+it's a small rust program that runs on a server and shows up in whatsapp as a linked device, like whatsapp web. gemini reads your message (or listens to your voice note) and works out what you meant. rust then checks the result before anything gets created, so a weird answer from the model can't make a mess of your calendar.
 
-To pair and start the daemon:
+## setting it up
 
-```bash
-cargo run -- run
-```
+you need:
 
-The QR code is printed to standard output only during initial pairing. `WHATSAPP_SESSION_DATABASE_PATH` persists the linked-device state so it is reused on restart. Treat that file as a credential and keep it owner-readable only.
+- a linux server that stays on. the cheapest VPS works, and so does a free oracle cloud one. prebuilt binaries cover x86_64 and ARM64 with glibc 2.35+ (ubuntu 22.04+, debian 12+)
+- a free gemini API key from [google ai studio](https://aistudio.google.com/apikey)
+- a google service account key, so it can add events to your calendar. [docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md) walks you through it, takes about two minutes
 
-To link WhatsApp and find your `OWNER_JID`, set only `WHATSAPP_SESSION_DATABASE_PATH` and run the command below. After scanning the QR code, send yourself any message; the command prints the exact `OWNER_JID=` line to use and exits.
+### one command on the server
 
-```bash
-cargo run -- pair
-```
-
-`cargo run -- check` verifies the Gemini key and Google Calendar access without sending anything.
-
-Run checks with:
+copy the key to the server, then run the installer there:
 
 ```bash
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release
+scp service-account.json you@your-server:
+ssh you@your-server
+curl -fsSL https://raw.githubusercontent.com/life2harsh/whatagent/main/deploy/install.sh | sudo bash -s -- --service-account ~/service-account.json
 ```
 
-## Environment
+the installer:
 
-See `.env.example`. `OWNER_JID` is the canonical WhatsApp JID for the account running the daemon. `GEMINI_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_KEY_PATH`, and `GOOGLE_CALENDAR_ID` are required; `KEEP_BRIDGE_URL`/`KEEP_BRIDGE_TOKEN` enable Keep sync. `WHATSAPP_SESSION_DATABASE_PATH` is separate from the small agent-state database. Do not commit `.env`, the session database, or key files.
+1. downloads the latest release for your CPU and checks its checksum
+2. creates the `wa-calendar` user and `/opt/wa-calendar-agent`, and installs the systemd service
+3. asks for your gemini key (and checks it works), your calendar ID and your timezone
+4. tells you who to share your calendar with, then tests gemini and calendar access
+5. shows a QR code: scan it under whatsapp > settings > linked devices
+6. asks you to message yourself once, so it knows which chat is yours
+7. starts the service and waits until it's connected
 
-## State
+you can delete `~/service-account.json` after that. the installer keeps its own copy, readable only by the service.
 
-SQLite stores message processing state, pending confirmations, tasks, and delivery outboxes. It is not a message archive. A message ID is claimed before any Google call, preventing replayed WhatsApp events from being processed twice. Calendar events are also created with an ID derived from the message ID, so even a lost response followed by a retry cannot create a duplicate.
+### or from your own machine
 
-## Tasks and WhatsApp reminders
+`deploy/deploy.sh` does the same thing over SSH and uploads the key for you:
 
-Tasks and reminders are stored durably in the same SQLite database. You can create a task in two ways: the explicit `todo` command below (ISO-8601 times with a timezone offset), or plain language in a text or voice message, which Gemini reads as a task and turns into one with a due or reminder time.
+```bash
+deploy/deploy.sh you@your-server --service-account ./service-account.json
+deploy/deploy.sh you@your-server -i ~/.ssh/my-key     # upgrade later
+```
+
+add `--binary path/to/wa-calendar-agent` to deploy a binary you built yourself instead of a release.
+
+### google keep (optional)
+
+to also get todos on a google keep checklist, run this from your own machine after the install:
+
+```bash
+deploy/keep-setup.sh you@your-server -i ~/.ssh/my-key
+```
+
+it opens a small google sign-in window, sets up the keep bridge on the server and connects everything. details are in [docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md).
+
+### upgrading and changing settings
+
+run the same command again to upgrade. your settings, the whatsapp link and your todos are kept, the old binary is backed up next to the new one, and the rollback command is printed at the end. other options:
+
+| option | what it does |
+| --- | --- |
+| `--version v0.2.0` | install a specific release instead of the latest |
+| `--reconfigure` | ask for the gemini key, calendar, timezone and service account again |
+| `--relink` | unlink whatsapp and show a new QR code |
+
+settings live in `/etc/wa-calendar-agent.env` (after editing it, run `sudo systemctl restart wa-calendar-agent`). handy commands:
+
+```bash
+journalctl -u wa-calendar-agent -f                         # logs
+sudo systemctl restart wa-calendar-agent                   # restart
+sudo -u wa-calendar sh -c 'set -a; . /etc/wa-calendar-agent.env; /opt/wa-calendar-agent/wa-calendar-agent check'
+```
+
+the service is capped at 25% CPU and 512 MB of memory, so it's happy sharing a small VPS with other stuff.
+
+## commands
+
+mostly you just write normally. there are a few exact commands too:
 
 ```text
 todo submit DBMS assignment | due 2026-09-18T17:00:00+05:30 | remind 2026-09-18T16:00:00+05:30 | note upload the PDF
@@ -62,94 +125,65 @@ done 1
 remind 2026-09-18T16:00:00+05:30 | call Abhinav
 ```
 
-The connected daemon checks due reminders every `REMINDER_POLL_SECONDS` seconds, sends the message to the configured self-chat, and records delivery in SQLite. A failed send remains recoverable instead of being silently discarded. When `KEEP_BRIDGE_URL` is configured, each new task is appended as an unchecked item to a single Google Keep checklist (named by `KEEP_LIST_TITLE`, default "WhatsApp Todos") through the local `keep-bridge`, so all your todos live in one list. Keep sync is durable and retried independently from task creation. After changing the bridge, redeploy it with `deploy/keep-setup.sh you@server -i key --update` (no new sign-in).
+`tasks` lists your open todos, `done 1` ticks one off (and cancels its reminder), and `remind` sets a plain reminder with no todo attached. the `todo` and `remind` commands take exact times with a timezone offset; if you'd rather say "tomorrow at 6", just write it normally.
 
-## Calendar details, confirmation, and recurrence
+## details
 
-Agenda text, notes, and other supplied event details become the Google Calendar description. Explicit recurring requests are supported through validated RFC 5545 rules. For example, `cal add a recurring event every Wednesday at 3pm to solve the NPTEL assignment` becomes a weekly Wednesday event. Vague repetition is rejected rather than silently creating an incorrect series. When the time itself is vague, the agent replies with its best reading and waits for `yes` or `no`. Messages that are clearly not calendar requests are declined.
+**reminders.** the service checks for due reminders every `REMINDER_POLL_SECONDS` seconds and sends them to your self-chat. if a send fails, it's retried instead of being dropped.
 
-## Deploying to a VPS
+**google keep.** with `KEEP_BRIDGE_URL` set, every new todo is added as an unchecked item to one checklist (named by `KEEP_LIST_TITLE`, default "WhatsApp Todos") through the small `keep-bridge` service. syncing to keep is retried separately from creating the todo, so a keep hiccup never loses a todo. after changing the bridge code, redeploy it with `deploy/keep-setup.sh you@server -i key --update` (no new sign-in). ticking an item in keep doesn't mark the todo done here yet.
 
-Any Linux server with systemd works, including the cheapest VPS tier. Prebuilt binaries cover x86_64 and ARM64 with glibc 2.35+ (Ubuntu 22.04+, Debian 12+).
+**calendar.** agenda text, notes and other details go into the event description. repeating events use validated RFC 5545 rules, and vague repetition ("sometimes on weekends") is rejected rather than guessed. messages that clearly aren't events or todos (links, greetings, questions) are politely declined.
 
-Before you start, you need:
+**no duplicates.** every whatsapp message ID is claimed in SQLite before anything talks to google, so a replayed message is never processed twice. calendar events also get an ID based on the message ID, so even a retry after a lost response can't create a second event.
 
-- a Gemini API key from [Google AI Studio](https://aistudio.google.com/apikey);
-- a Google service account JSON key (see `docs/GOOGLE_SETUP.md`; it takes about two minutes).
+**state.** SQLite holds processing state, pending confirmations, todos and the delivery queues. it isn't a message archive. the whatsapp session lives in a separate database; treat that file like a password.
 
-### One command on the server
+## developing locally
 
-Copy the key to the server, then run the installer there:
-
-```bash
-scp service-account.json you@your-server:
-ssh you@your-server
-curl -fsSL https://raw.githubusercontent.com/life2harsh/whatagent/main/deploy/install.sh | sudo bash -s -- --service-account ~/service-account.json
-```
-
-The installer:
-
-1. downloads the latest release for your CPU and checks its checksum;
-2. creates the `wa-calendar` user and `/opt/wa-calendar-agent`, and installs the systemd service;
-3. asks for your Gemini key (it checks the key works), calendar ID and timezone;
-4. shows who to share your calendar with, then tests Gemini and Calendar access;
-5. prints a QR code: link it under WhatsApp > Settings > Linked devices;
-6. asks you to send yourself one message, which tells it your `OWNER_JID`;
-7. starts the service and waits until it's connected.
-
-You can delete `~/service-account.json` afterwards; the installer keeps its own copy, readable only by the service.
-
-### Or from your own machine
-
-`deploy/deploy.sh` does the same over SSH, uploading the key for you:
+1. copy `.env.example` to `.env` and fill in the required values (see below)
+2. set up gemini and the calendar service account as in [docs/GOOGLE_SETUP.md](docs/GOOGLE_SETUP.md)
+3. try it without whatsapp:
 
 ```bash
-deploy/deploy.sh you@your-server --service-account ./service-account.json
-deploy/deploy.sh you@your-server -i ~/.ssh/my-key     # upgrade later
+cargo run -- test-calendar "cal OSDC meeting tomorrow at 6pm"
 ```
 
-Add `--binary path/to/wa-calendar-agent` to deploy a binary you built yourself instead of a release.
+this calls gemini and google calendar for real (it creates a real event) and prints the reply you'd get on whatsapp.
 
-### Upgrading and changing settings
+to link whatsapp and find your `OWNER_JID`, set `WHATSAPP_SESSION_DATABASE_PATH`, run `cargo run -- pair`, scan the QR code and message yourself once. it prints the exact `OWNER_JID=` line to use and exits. after that, `cargo run -- run` starts the daemon, and `cargo run -- check` tests the gemini key and calendar access without sending anything.
 
-Re-run the same command to upgrade. Settings, the WhatsApp session and your tasks are kept, the previous binary is backed up next to the new one, and the rollback command is printed at the end. Other options:
+**environment.** see `.env.example`. `OWNER_JID`, `GEMINI_API_KEY`, `GOOGLE_SERVICE_ACCOUNT_KEY_PATH` and `GOOGLE_CALENDAR_ID` are required; `KEEP_BRIDGE_URL` and `KEEP_BRIDGE_TOKEN` turn on keep sync. don't commit `.env`, the session database or any key files.
 
-| Option | Effect |
-| --- | --- |
-| `--version v0.2.0` | Install a specific release instead of the latest. |
-| `--reconfigure` | Ask for the Gemini key, calendar, timezone and service account again. |
-| `--relink` | Unlink and show a new WhatsApp QR code. |
-
-Settings live in `/etc/wa-calendar-agent.env` (after editing it, run `sudo systemctl restart wa-calendar-agent`). Useful commands:
+checks:
 
 ```bash
-journalctl -u wa-calendar-agent -f                         # logs
-sudo systemctl restart wa-calendar-agent                   # restart
-sudo -u wa-calendar sh -c 'set -a; . /etc/wa-calendar-agent.env; /opt/wa-calendar-agent/wa-calendar-agent check'
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
+cargo build --release
 ```
 
-The service is capped at 25% CPU and 512 MB of memory, so it can share a small VPS with other services. For Keep sync, run `deploy/keep-setup.sh you@your-server` from your machine (see `docs/GOOGLE_SETUP.md`).
+### publishing releases
 
-### Publishing releases
-
-The installer downloads binaries from this repository's GitHub releases, so the repository must be public. Push a version tag to build and publish them:
+the installer downloads binaries from this repo's github releases, so the repo has to be public. push a version tag to build and publish them:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-`.github/workflows/release.yml` builds x86_64 and ARM64 binaries and attaches them to the release. Forks can point the installer at their own releases with `WA_REPO=owner/repo`.
+`.github/workflows/release.yml` builds x86_64 and ARM64 binaries and attaches them to the release. forks can point the installer at their own releases with `WA_REPO=owner/repo`.
 
-## Full-pipeline checklist
+### full-pipeline checklist
 
-- [ ] The service account's email has "Make changes to events" on `GOOGLE_CALENDAR_ID`.
-- [ ] `cargo run -- test-calendar "cal test event tomorrow at 6pm"` returns a created result.
-- [ ] A deliberately vague request asks for confirmation, and `yes` creates exactly one Calendar event.
-- [ ] Set `OWNER_JID` to the `OWNER_JID=` line printed by `wa-calendar-agent pair` (the installer does this for you).
-- [ ] Run `cargo run -- run`, scan the QR code, and verify a session database is created with restrictive permissions.
-- [ ] Send `cal test event tomorrow at 6pm` from the linked account's self-chat and receive one concise reply.
-- [ ] Send a real voice note for an event and verify one Calendar event and one WhatsApp confirmation.
-- [ ] Send a voice note like "remind me to buy milk tomorrow at 6pm" and verify one task (and a new item on the Keep checklist when sync is on).
-- [ ] Send a clear recurring request and verify the event shows as repeating in Google Calendar.
-- [ ] Add a task, list it, complete it, and verify one scheduled reminder reaches the self-chat.
+- [ ] the service account's email has "make changes to events" on `GOOGLE_CALENDAR_ID`
+- [ ] `cargo run -- test-calendar "cal test event tomorrow at 6pm"` creates an event
+- [ ] a deliberately vague request asks for confirmation, and `yes` creates exactly one event
+- [ ] `OWNER_JID` matches the line printed by `wa-calendar-agent pair` (the installer does this for you)
+- [ ] after `cargo run -- run` and scanning the QR code, the session database exists and only you can read it
+- [ ] `cal test event tomorrow at 6pm` in your self-chat gets one short reply
+- [ ] a voice note for an event creates one calendar event and one whatsapp confirmation
+- [ ] a voice note like "remind me to buy milk tomorrow at 6pm" creates one todo (and one new keep checklist item, if keep is on)
+- [ ] a clear repeating request shows up as a repeating event in google calendar
+- [ ] add a todo, list it, complete it, and check that one scheduled reminder reaches your self-chat
