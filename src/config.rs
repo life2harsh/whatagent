@@ -15,8 +15,8 @@ pub struct Config {
     pub gemini_base_url: Url,
     pub gemini_text_models: Vec<String>,
     pub gemini_audio_models: Vec<String>,
-    pub google_service_account_key_path: PathBuf,
-    pub google_calendar_id: String,
+    /// None runs without Google Calendar: events become tasks with reminders.
+    pub google_calendar: Option<GoogleCalendarSettings>,
     pub google_calendar_base_url: Url,
     pub keep_bridge_url: Option<Url>,
     pub keep_bridge_token: Option<String>,
@@ -27,6 +27,12 @@ pub struct Config {
     pub reminder_poll_interval: Duration,
     pub database_url: String,
     pub whatsapp_session_database_path: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GoogleCalendarSettings {
+    pub service_account_key_path: PathBuf,
+    pub calendar_id: String,
 }
 
 impl Config {
@@ -52,6 +58,21 @@ impl Config {
             .map(|value| url("KEEP_BRIDGE_URL", &value))
             .transpose()?;
         let keep_bridge_token = optional("KEEP_BRIDGE_TOKEN");
+        let google_calendar = match (
+            optional("GOOGLE_SERVICE_ACCOUNT_KEY_PATH"),
+            optional("GOOGLE_CALENDAR_ID"),
+        ) {
+            (Some(key_path), Some(calendar_id)) => Some(GoogleCalendarSettings {
+                service_account_key_path: key_path.into(),
+                calendar_id,
+            }),
+            (None, None) => None,
+            _ => {
+                return Err(AgentError::Config(
+                    "set both GOOGLE_SERVICE_ACCOUNT_KEY_PATH and GOOGLE_CALENDAR_ID, or neither to run without Google Calendar".to_owned(),
+                ))
+            }
+        };
         if keep_bridge_url.is_some() && keep_bridge_token.is_none() {
             return Err(AgentError::Config(
                 "KEEP_BRIDGE_TOKEN must be set when KEEP_BRIDGE_URL is set".to_owned(),
@@ -67,8 +88,7 @@ impl Config {
             )?,
             gemini_text_models: model_chain(&text_model, &fallbacks),
             gemini_audio_models: model_chain(&audio_model, &fallbacks),
-            google_service_account_key_path: required("GOOGLE_SERVICE_ACCOUNT_KEY_PATH")?.into(),
-            google_calendar_id: required("GOOGLE_CALENDAR_ID")?,
+            google_calendar,
             google_calendar_base_url: url(
                 "GOOGLE_CALENDAR_BASE_URL",
                 &optional("GOOGLE_CALENDAR_BASE_URL")

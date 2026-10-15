@@ -15,6 +15,8 @@ pub enum CalendarOutcome {
         remind_at: Option<DateTime<Utc>>,
         /// "Heard: ..." line for voice notes, empty otherwise.
         heard: String,
+        /// An extra line for the reply, such as a limitation worth knowing.
+        note: Option<String>,
     },
     /// The event was already created for this message (a replay or retry).
     AlreadyAdded {

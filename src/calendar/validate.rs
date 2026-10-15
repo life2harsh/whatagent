@@ -16,7 +16,7 @@ pub enum Validation {
 
 pub fn validate(extracted: &ExtractedEvent, now: DateTime<Utc>) -> Validation {
     if extracted.intent != "create_calendar_event" {
-        return Validation::Reject("That doesn't look like a calendar request.".to_owned());
+        return Validation::Reject("That doesn't look like an event or a todo.".to_owned());
     }
     let reason = non_empty(extracted.ambiguity_reason.as_deref());
     let Some(title) = non_empty(extracted.title.as_deref()) else {

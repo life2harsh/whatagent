@@ -26,13 +26,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Link WhatsApp and print the OWNER_JID for your self-chat.
+    #[command(about = "Link WhatsApp and print the OWNER_JID for your self-chat")]
     Pair,
-    /// Run the daemon.
+    #[command(about = "Run the daemon")]
     Run,
-    /// Verify the Gemini key and Google Calendar access, then exit.
+    #[command(about = "Verify the Gemini key and Google Calendar access (if set up), then exit")]
     Check,
-    /// Process one message as if it came from the self-chat (creates a real event).
+    #[command(
+        about = "Process one message as if it came from the self-chat (creates a real event if Calendar is set up)"
+    )]
     TestCalendar { text: String },
 }
 
@@ -62,19 +64,25 @@ async fn main() -> anyhow::Result<()> {
         config.gemini_text_models.clone(),
         config.gemini_audio_models.clone(),
     );
-    let google_auth = ServiceAccountAuth::from_file(
-        http.clone(),
-        &config.google_service_account_key_path,
-        CALENDAR_EVENTS_SCOPE,
-    )?;
-    let google_calendar = GoogleCalendarClient::new(
-        http.clone(),
-        config.google_calendar_base_url.clone(),
-        config.google_calendar_id.clone(),
-        Arc::new(google_auth),
-    );
+    let google_calendar = match &config.google_calendar {
+        Some(settings) => Some(GoogleCalendarClient::new(
+            http.clone(),
+            config.google_calendar_base_url.clone(),
+            settings.calendar_id.clone(),
+            Arc::new(ServiceAccountAuth::from_file(
+                http.clone(),
+                &settings.service_account_key_path,
+                CALENDAR_EVENTS_SCOPE,
+            )?),
+        )),
+        None => None,
+    };
     if matches!(&cli.command, Command::Check) {
-        return check(&gemini, &google_calendar, &config.google_calendar_id).await;
+        let calendar_id = config
+            .google_calendar
+            .as_ref()
+            .map(|s| s.calendar_id.as_str());
+        return check(&gemini, google_calendar.as_ref().zip(calendar_id)).await;
     }
     let calendar = CalendarService::new(
         gemini,
@@ -127,29 +135,50 @@ async fn main() -> anyhow::Result<()> {
 
 async fn check(
     gemini: &GeminiClient,
-    calendar: &GoogleCalendarClient,
-    calendar_id: &str,
+    calendar: Option<(&GoogleCalendarClient, &str)>,
 ) -> anyhow::Result<()> {
     let mut failed = false;
     match gemini.check().await {
         Ok(model) => println!("ok    Gemini API key works ({model})"),
         Err(error) => {
             failed = true;
-            println!("FAIL  Gemini: {}\n      {error}", error.user_message());
-        }
-    }
-    match calendar.check_access().await {
-        Ok(()) => println!("ok    Google Calendar access to {calendar_id}"),
-        Err(error) => {
-            failed = true;
             println!(
-                "FAIL  Google Calendar: {}\n      {error}",
-                error.user_message()
+                "FAIL  Gemini: {}\n      {}",
+                error.user_message(),
+                brief(&error)
             );
         }
+    }
+    match calendar {
+        None => println!("skip  Google Calendar isn't set up; events become WhatsApp reminders"),
+        Some((calendar, calendar_id)) => match calendar.check_access().await {
+            Ok(()) => println!("ok    Google Calendar access to {calendar_id}"),
+            Err(error) => {
+                failed = true;
+                println!(
+                    "FAIL  Google Calendar: {}\n      {}",
+                    error.user_message(),
+                    brief(&error)
+                );
+            }
+        },
     }
     if failed {
         anyhow::bail!("setup check failed");
     }
     Ok(())
+}
+
+/// The first line of an error, shortened: enough to search for, without
+/// dumping Google's whole JSON response on someone setting this up.
+fn brief(error: &impl std::fmt::Display) -> String {
+    let text = error.to_string();
+    // Google's JSON body starts with "{"; the status before it says enough.
+    let line = text.lines().next().unwrap_or_default();
+    let line = line.split('{').next().unwrap_or_default().trim_end();
+    let line = line.trim_end_matches(':');
+    match line.char_indices().nth(160) {
+        Some((cut, _)) => format!("{}...", &line[..cut]),
+        None => line.to_owned(),
+    }
 }

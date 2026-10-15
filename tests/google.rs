@@ -211,7 +211,19 @@ fn service(server: &MockServer) -> CalendarService {
         "me@example.com".to_owned(),
         Arc::new(StaticToken("calendar-token".to_owned())),
     );
-    CalendarService::new(gemini, calendar, chrono_tz::Asia::Kolkata, 60)
+    CalendarService::new(gemini, Some(calendar), chrono_tz::Asia::Kolkata, 60)
+}
+
+/// The same service with Google Calendar not set up.
+fn service_without_calendar(server: &MockServer) -> CalendarService {
+    let gemini = GeminiClient::new(
+        reqwest::Client::new(),
+        url::Url::parse(&server.uri()).unwrap(),
+        "gemini-key".to_owned(),
+        vec!["text-model".to_owned()],
+        vec!["audio-model".to_owned()],
+    );
+    CalendarService::new(gemini, None, chrono_tz::Asia::Kolkata, 60)
 }
 
 fn far_future_event() -> serde_json::Value {
@@ -384,6 +396,7 @@ async fn voice_note_can_create_a_task_instead_of_an_event() {
         due_at,
         remind_at,
         heard,
+        note,
     } = outcome
     else {
         panic!("expected a task, got something else");
@@ -400,6 +413,7 @@ async fn voice_note_can_create_a_task_instead_of_an_event() {
         )
     );
     assert!(heard.contains("remind me to buy milk"));
+    assert_eq!(note, None);
 }
 
 #[tokio::test]
@@ -618,4 +632,91 @@ async fn setup_check_explains_a_bad_key_and_an_unshared_calendar() {
         calendar_error.contains("shared with the service account"),
         "{calendar_error}"
     );
+}
+
+#[tokio::test]
+async fn without_calendar_an_event_becomes_a_task_with_a_reminder() {
+    let server = MockServer::start().await;
+    let mut event = far_future_event();
+    event["recurrence"] = serde_json::Value::Null;
+    event["location"] = serde_json::json!("Room 204");
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/text-model:generateContent"))
+        .respond_with(gemini_reply(event))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"/events$"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+
+    let outcome = service_without_calendar(&server)
+        .handle("no-cal-1", ExtractionInput::Text("NPTEL at 3pm".to_owned()))
+        .await
+        .unwrap();
+
+    let start = chrono::DateTime::parse_from_rfc3339("2099-09-16T15:00:00+05:30")
+        .unwrap()
+        .to_utc();
+    assert_eq!(
+        outcome,
+        CalendarOutcome::Task {
+            title: "Solve NPTEL assignment".to_owned(),
+            notes: Some("At Room 204".to_owned()),
+            due_at: Some(start),
+            remind_at: Some(start - chrono::Duration::minutes(30)),
+            heard: String::new(),
+            note: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn without_calendar_a_repeating_event_says_only_the_first_reminder_is_set() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/text-model:generateContent"))
+        .respond_with(gemini_reply(far_future_event()))
+        .mount(&server)
+        .await;
+
+    let outcome = service_without_calendar(&server)
+        .handle(
+            "no-cal-2",
+            ExtractionInput::Text("every Wednesday at 3pm".to_owned()),
+        )
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        CalendarOutcome::Task { note: Some(note), .. } if note.contains("only the first one")
+    ));
+}
+
+#[tokio::test]
+async fn without_calendar_a_confirmed_event_becomes_a_task() {
+    let server = MockServer::start().await;
+    let candidate = EventCandidate {
+        title: "Return to college".to_owned(),
+        start: chrono::DateTime::parse_from_rfc3339("2099-11-12T09:00:00+05:30").unwrap(),
+        end: chrono::DateTime::parse_from_rfc3339("2099-11-12T10:00:00+05:30").unwrap(),
+        description: None,
+        location: None,
+        recurrence: None,
+    };
+
+    let outcome = service_without_calendar(&server)
+        .create("message-1", &candidate)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        CalendarOutcome::Task { title, due_at: Some(_), remind_at: Some(_), .. }
+            if title == "Return to college"
+    ));
 }

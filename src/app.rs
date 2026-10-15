@@ -162,7 +162,7 @@ impl Agent {
                 .set_message_status(&command.message_id, MessageStatus::Completed)
                 .await?;
             return Ok(ProcessOutcome::Reply(
-                "There is no pending calendar request to confirm.".to_owned(),
+                "There is nothing waiting for a yes or no.".to_owned(),
             ));
         };
         if !approved {
@@ -248,7 +248,7 @@ impl Agent {
                     .await?;
                 warn!(message_id = %command.message_id, %error, "calendar request failed");
                 return Ok(ProcessOutcome::Reply(format!(
-                    "Couldn't add that to Calendar. {}",
+                    "Couldn't add that. {}",
                     error.user_message()
                 )));
             }
@@ -262,6 +262,7 @@ impl Agent {
                 due_at,
                 remind_at,
                 heard,
+                note,
             } => {
                 let task = self
                     .store
@@ -275,7 +276,7 @@ impl Agent {
                     })
                     .await?;
                 let synced = self.sync_google_keep_notes().await?;
-                format!(
+                let mut reply = format!(
                     "{heard}{}",
                     format_task_created(
                         &task,
@@ -283,10 +284,14 @@ impl Agent {
                         self.keep.is_some(),
                         synced > 0
                     )
-                )
+                );
+                if let Some(note) = note {
+                    reply.push_str(&format!("\n{note}"));
+                }
+                reply
             }
             CalendarOutcome::Error { message } => {
-                format!("Couldn't add that to Calendar: {message}")
+                format!("Couldn't add that. {message}")
             }
             CalendarOutcome::NeedsConfirmation {
                 request_id,

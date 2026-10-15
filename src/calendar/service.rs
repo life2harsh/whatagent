@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Duration, TimeZone, Utc};
 use chrono_tz::Tz;
 
 use crate::{
@@ -13,10 +13,15 @@ use crate::{
     },
 };
 
-/// Turns a text or voice request into a Google Calendar event.
+/// How long before an event its WhatsApp reminder goes out when there is no
+/// Google Calendar (the same default Google Calendar uses).
+const EVENT_REMINDER_MINUTES: i64 = 30;
+
+/// Turns a text or voice request into a Google Calendar event, or into a task
+/// with a reminder when Google Calendar isn't set up.
 pub struct CalendarService {
     gemini: GeminiClient,
-    calendar: GoogleCalendarClient,
+    calendar: Option<GoogleCalendarClient>,
     timezone: Tz,
     default_event_duration_minutes: u32,
 }
@@ -24,7 +29,7 @@ pub struct CalendarService {
 impl CalendarService {
     pub fn new(
         gemini: GeminiClient,
-        calendar: GoogleCalendarClient,
+        calendar: Option<GoogleCalendarClient>,
         timezone: Tz,
         default_event_duration_minutes: u32,
     ) -> Self {
@@ -61,6 +66,9 @@ impl CalendarService {
         }
 
         match validate(&extracted, now) {
+            Validation::Ready(candidate) if self.calendar.is_none() => {
+                Ok(event_as_task(&candidate, heard, now))
+            }
             Validation::Ready(candidate) => self.create(message_id, &candidate).await,
             Validation::Confirm { candidate, reason } => {
                 let mut message = format!(
@@ -83,14 +91,17 @@ impl CalendarService {
     }
 
     /// Creates the event. The ID derives from the source message, so retrying
-    /// the same message can never create a second event.
+    /// the same message can never create a second event. Without Google
+    /// Calendar it returns a task with a reminder instead.
     pub async fn create(
         &self,
         source_message_id: &str,
         candidate: &EventCandidate,
     ) -> Result<CalendarOutcome, AgentError> {
-        let outcome = self
-            .calendar
+        let Some(calendar) = &self.calendar else {
+            return Ok(event_as_task(candidate, String::new(), Utc::now()));
+        };
+        let outcome = calendar
             .insert_event(
                 &event_id_for(source_message_id),
                 candidate,
@@ -145,6 +156,31 @@ fn build_task(extracted: &ExtractedEvent, heard: String, now: DateTime<Utc>) -> 
         due_at: parse_utc(extracted.due.as_deref()),
         remind_at: parse_utc(extracted.remind.as_deref()).filter(|time| *time > now),
         heard,
+        note: None,
+    }
+}
+
+/// Without Google Calendar, an event becomes a task due when it starts, with a
+/// WhatsApp reminder shortly before (or at the start, if that is too soon).
+fn event_as_task(candidate: &EventCandidate, heard: String, now: DateTime<Utc>) -> CalendarOutcome {
+    let start = candidate.start.to_utc();
+    let remind_at = [start - Duration::minutes(EVENT_REMINDER_MINUTES), start]
+        .into_iter()
+        .find(|time| *time > now);
+    let location = non_empty(candidate.location.as_deref()).map(|place| format!("At {place}"));
+    let notes = [non_empty(candidate.description.as_deref()), location]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    CalendarOutcome::Task {
+        title: candidate.title.clone(),
+        notes: (!notes.is_empty()).then(|| notes.join("\n")),
+        due_at: Some(start),
+        remind_at,
+        heard,
+        note: candidate.recurrence.as_ref().map(|_| {
+            "Repeating reminders need Google Calendar, so only the first one is set.".to_owned()
+        }),
     }
 }
 
