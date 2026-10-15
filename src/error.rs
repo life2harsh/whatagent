@@ -21,7 +21,6 @@ pub enum AgentError {
 }
 
 impl AgentError {
-    /// An upstream failure that is not an HTTP status (bad JSON, empty reply, ...).
     pub fn upstream(service: &'static str, message: impl Into<String>) -> Self {
         Self::Upstream {
             service,
@@ -30,7 +29,6 @@ impl AgentError {
         }
     }
 
-    /// An upstream non-success HTTP response.
     pub fn upstream_status(service: &'static str, status: reqwest::StatusCode, body: &str) -> Self {
         Self::Upstream {
             service,
@@ -39,8 +37,6 @@ impl AgentError {
         }
     }
 
-    /// Overloads, rate limits, server errors and network failures that may
-    /// succeed on another attempt or another model.
     pub fn is_transient(&self) -> bool {
         match self {
             Self::Upstream {
@@ -52,8 +48,6 @@ impl AgentError {
         }
     }
 
-    /// A short, human-readable explanation for the WhatsApp reply. The full
-    /// error (with Google's raw response) goes to the logs instead.
     pub fn user_message(&self) -> String {
         let text = match self {
             Self::Upstream {

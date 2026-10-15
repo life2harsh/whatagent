@@ -169,11 +169,8 @@ async fn check(
     Ok(())
 }
 
-/// The first line of an error, shortened: enough to search for, without
-/// dumping Google's whole JSON response on someone setting this up.
 fn brief(error: &impl std::fmt::Display) -> String {
     let text = error.to_string();
-    // Google's JSON body starts with "{"; the status before it says enough.
     let line = text.lines().next().unwrap_or_default();
     let line = line.split('{').next().unwrap_or_default().trim_end();
     let line = line.trim_end_matches(':');

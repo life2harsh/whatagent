@@ -17,4 +17,4 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
-      - run: shellcheck deploy/install.sh deploy/deploy.sh deploy/keep-setup.sh
+      - run: shellcheck deploy/*.sh

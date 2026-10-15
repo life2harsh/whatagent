@@ -17,13 +17,11 @@ use crate::error::AgentError;
 
 pub const CALENDAR_EVENTS_SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
 
-/// Supplies OAuth bearer tokens for Google APIs.
 #[async_trait]
 pub trait AccessTokenSource: Send + Sync {
     async fn access_token(&self) -> Result<String, AgentError>;
 }
 
-/// A fixed token, used by tests and local experiments.
 pub struct StaticToken(pub String);
 
 #[async_trait]
@@ -46,8 +44,6 @@ struct TokenResponse {
     expires_in: u64,
 }
 
-/// Exchanges a signed service-account JWT for short-lived access tokens.
-/// Unlike a user OAuth refresh token, this never needs reconnecting.
 pub struct ServiceAccountAuth {
     http: reqwest::Client,
     client_email: String,
@@ -149,7 +145,6 @@ impl AccessTokenSource for ServiceAccountAuth {
             .json()
             .await
             .map_err(|error| AgentError::upstream("Google auth", error.to_string()))?;
-        // Refresh a minute early so a token never expires mid-request.
         let lifetime = Duration::from_secs(token.expires_in.saturating_sub(60));
         *cached = Some((token.access_token.clone(), Instant::now() + lifetime));
         Ok(token.access_token)

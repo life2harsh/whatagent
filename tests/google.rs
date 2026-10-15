@@ -214,7 +214,6 @@ fn service(server: &MockServer) -> CalendarService {
     CalendarService::new(gemini, Some(calendar), chrono_tz::Asia::Kolkata, 60)
 }
 
-/// The same service with Google Calendar not set up.
 fn service_without_calendar(server: &MockServer) -> CalendarService {
     let gemini = GeminiClient::new(
         reqwest::Client::new(),
@@ -371,7 +370,6 @@ async fn voice_note_can_create_a_task_instead_of_an_event() {
         .expect(1)
         .mount(&server)
         .await;
-    // A task must not hit the Calendar API.
     Mock::given(method("POST"))
         .and(path_regex(r"/events$"))
         .respond_with(ResponseTemplate::new(500))

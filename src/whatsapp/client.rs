@@ -163,9 +163,6 @@ fn print_qr_code(payload: &str) {
     }
 }
 
-/// Links the device (printing a QR code when needed), then waits for a message
-/// the owner sends to their own chat and prints the exact `OWNER_JID=` line to
-/// use. That JID can differ from the account's phone-number and LID JIDs.
 pub async fn pair(session_database_path: String) -> Result<(), AgentError> {
     let store = SqliteStore::new(&session_database_path)
         .await

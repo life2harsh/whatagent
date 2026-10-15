@@ -15,7 +15,6 @@ pub struct Config {
     pub gemini_base_url: Url,
     pub gemini_text_models: Vec<String>,
     pub gemini_audio_models: Vec<String>,
-    /// None runs without Google Calendar: events become tasks with reminders.
     pub google_calendar: Option<GoogleCalendarSettings>,
     pub google_calendar_base_url: Url,
     pub keep_bridge_url: Option<Url>,
@@ -112,11 +111,9 @@ impl Config {
     }
 }
 
-/// Tried in order after the primary model when Gemini is overloaded.
 const DEFAULT_GEMINI_FALLBACK_MODELS: &str =
     "gemini-3.6-flash,gemini-3.5-flash-lite,gemini-flash-latest";
 
-/// The primary model followed by the fallbacks, without duplicates.
 fn model_chain(primary: &str, fallbacks: &[String]) -> Vec<String> {
     let mut chain = vec![primary.to_owned()];
     for model in fallbacks {

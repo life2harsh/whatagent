@@ -1,20 +1,3 @@
-"""Localhost bridge that adds Google Keep checklist items for wa-calendar-agent.
-
-Google's official Keep API only works for Workspace accounts, so this uses the
-unofficial gkeepapi library with a master token. Each task is appended as an
-unchecked item to a single Keep list (titled by KEEP_LIST_TITLE), so all todos
-live in one checklist rather than one note each. It speaks the same contract as
-the Rust GoogleKeepWebhookClient:
-
-    POST /notes   Authorization: Bearer <KEEP_BRIDGE_TOKEN>
-                  X-Idempotency-Key: keep-task-<id>
-                  {"task_id": 7, "chat_id": "...", "title": "...", "body": "..."}
-    200 -> {"status": "created", "note": {"name": "<keep item id>", "title": "..."}, "message": "..."}
-
-The item text is the task title. Failures return a non-2xx status; the Rust
-outbox retries them later. Run with --check to verify the login.
-"""
-
 import hmac
 import json
 import logging
@@ -38,8 +21,6 @@ MAX_BODY_BYTES = 64 * 1024
 
 
 class KeepSession:
-    """Owns the gkeepapi client. Requests are served one at a time, so no locking."""
-
     def __init__(self):
         self.keep = None
         self.db = sqlite3.connect(DATABASE_PATH)
@@ -77,7 +58,6 @@ class KeepSession:
         os.replace(temporary, STATE_PATH)
 
     def check(self):
-        """Logs in and caches state without creating anything; returns the note count."""
         self._login()
         self._save_state()
         return sum(1 for _ in self.keep.all())
@@ -91,9 +71,6 @@ class KeepSession:
         self.db.commit()
 
     def _find_list(self):
-        """Returns the live todo list node, or None. Prefers the id we stored,
-        then falls back to matching by title so a lost id or a fresh state
-        cache does not create a duplicate list."""
         row = self.db.execute(
             "SELECT list_id FROM lists WHERE title = ?", (LIST_TITLE,)
         ).fetchone()
@@ -126,7 +103,6 @@ class KeepSession:
                     self._login()
                 node = self._find_list()
                 if node is None:
-                    # One sync in case the list exists server-side but not locally.
                     self.keep.sync()
                     node = self._find_list()
                 if node is None:
@@ -138,7 +114,6 @@ class KeepSession:
                 self.keep.sync()
                 break
             except Exception:
-                # A stale session is the usual cause; log in again once.
                 self.keep = None
                 if attempt == 2:
                     raise
@@ -172,7 +147,6 @@ class Handler(BaseHTTPRequestHandler):
         try:
             request = json.loads(self.rfile.read(length))
             title = str(request["title"]).strip()
-            body = str(request.get("body") or "")
             key = self.headers.get("X-Idempotency-Key") or f"keep-task-{int(request['task_id'])}"
         except (ValueError, KeyError, TypeError):
             return self._reply(400, {"status": "error", "message": "invalid request"})
@@ -215,7 +189,15 @@ def main():
     )
     SESSION = KeepSession()
     if "--check" in sys.argv[1:]:
-        count = SESSION.check()
+        try:
+            count = SESSION.check()
+        except gkeepapi.exception.LoginException as error:
+            sys.exit(
+                f"Google didn't accept the Keep sign-in for {EMAIL} ({error}). "
+                "Get a fresh Keep code and try again."
+            )
+        except Exception as error:
+            sys.exit(f"Couldn't reach Google Keep ({error}).")
         print(f"Logged in to Google Keep as {EMAIL} ({count} notes)")
         return
     server = HTTPServer(("127.0.0.1", PORT), Handler)

@@ -22,7 +22,6 @@ impl MessageStatus {
     fn as_str(self) -> &'static str {
         match self {
             Self::Received => "received",
-            // Stored value predates the n8n removal; kept for existing databases.
             Self::Submitted => "sent_to_n8n",
             Self::Completed => "completed",
             Self::Failed => "failed",

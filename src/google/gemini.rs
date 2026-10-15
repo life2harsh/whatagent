@@ -34,7 +34,6 @@ pub struct ExtractionContext {
     pub default_event_duration_minutes: u32,
 }
 
-/// The model's structured reading of a request, before validation.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ExtractedEvent {
     pub intent: String,
@@ -56,10 +55,8 @@ pub struct ExtractedEvent {
     pub ambiguity_reason: Option<String>,
     #[serde(default)]
     pub transcript: Option<String>,
-    /// RFC 3339 deadline for a task (intent create_task), if the user gave one.
     #[serde(default)]
     pub due: Option<String>,
-    /// RFC 3339 time to remind for a task (intent create_task), if requested.
     #[serde(default)]
     pub remind: Option<String>,
 }
@@ -106,15 +103,11 @@ impl GeminiClient {
         }
     }
 
-    /// How long to wait before the second pass over the model list.
     pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
         self.retry_delay = retry_delay;
         self
     }
 
-    /// Tries each configured model in order, moving on when one is overloaded,
-    /// unavailable, or returns something unusable. After a full pass of
-    /// failures it waits briefly and makes one more pass.
     pub async fn extract_event(
         &self,
         input: ExtractionInput,
@@ -165,7 +158,6 @@ impl GeminiClient {
             .unwrap_or_else(|| AgentError::Config("no Gemini models are configured".to_owned())))
     }
 
-    /// Confirms the API key is accepted and the primary text model exists.
     pub async fn check(&self) -> Result<String, AgentError> {
         let model = self
             .text_models
@@ -236,8 +228,6 @@ impl GeminiClient {
     }
 }
 
-/// Transient failures, unknown model names (404), and unusable replies can
-/// all succeed on a different model; a rejected API key or bad request cannot.
 fn worth_another_model(error: &AgentError) -> bool {
     error.is_transient()
         || matches!(

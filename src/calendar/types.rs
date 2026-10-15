@@ -7,18 +7,14 @@ pub enum CalendarOutcome {
         event: CalendarEvent,
         message: String,
     },
-    /// The model read the request as a to-do; the agent creates the task.
     Task {
         title: String,
         notes: Option<String>,
         due_at: Option<DateTime<Utc>>,
         remind_at: Option<DateTime<Utc>>,
-        /// "Heard: ..." line for voice notes, empty otherwise.
         heard: String,
-        /// An extra line for the reply, such as a limitation worth knowing.
         note: Option<String>,
     },
-    /// The event was already created for this message (a replay or retry).
     AlreadyAdded {
         message: String,
     },
@@ -42,7 +38,6 @@ pub struct CalendarEvent {
     pub html_url: Option<String>,
 }
 
-/// A validated event, ready to create. Stored as JSON while awaiting confirmation.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct EventCandidate {
     pub title: String,

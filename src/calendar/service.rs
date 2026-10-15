@@ -13,12 +13,8 @@ use crate::{
     },
 };
 
-/// How long before an event its WhatsApp reminder goes out when there is no
-/// Google Calendar (the same default Google Calendar uses).
 const EVENT_REMINDER_MINUTES: i64 = 30;
 
-/// Turns a text or voice request into a Google Calendar event, or into a task
-/// with a reminder when Google Calendar isn't set up.
 pub struct CalendarService {
     gemini: GeminiClient,
     calendar: Option<GoogleCalendarClient>,
@@ -90,9 +86,6 @@ impl CalendarService {
         }
     }
 
-    /// Creates the event. The ID derives from the source message, so retrying
-    /// the same message can never create a second event. Without Google
-    /// Calendar it returns a task with a reminder instead.
     pub async fn create(
         &self,
         source_message_id: &str,
@@ -142,8 +135,6 @@ pub(crate) fn format_time<T: TimeZone>(time: DateTime<T>, timezone: Tz) -> Strin
         .to_string()
 }
 
-/// Turns a create_task extraction into a task outcome for the agent to store.
-/// A reminder time in the past is dropped rather than firing immediately.
 fn build_task(extracted: &ExtractedEvent, heard: String, now: DateTime<Utc>) -> CalendarOutcome {
     let Some(title) = non_empty(extracted.title.as_deref()) else {
         return CalendarOutcome::Error {
@@ -160,8 +151,6 @@ fn build_task(extracted: &ExtractedEvent, heard: String, now: DateTime<Utc>) -> 
     }
 }
 
-/// Without Google Calendar, an event becomes a task due when it starts, with a
-/// WhatsApp reminder shortly before (or at the start, if that is too soon).
 fn event_as_task(candidate: &EventCandidate, heard: String, now: DateTime<Utc>) -> CalendarOutcome {
     let start = candidate.start.to_utc();
     let remind_at = [start - Duration::minutes(EVENT_REMINDER_MINUTES), start]

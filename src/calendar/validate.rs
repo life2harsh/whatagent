@@ -64,7 +64,6 @@ pub fn validate(extracted: &ExtractedEvent, now: DateTime<Utc>) -> Validation {
     }
 }
 
-/// Accepts a constrained subset of RFC 5545 rules, returned without the `RRULE:` prefix.
 pub fn normalize_recurrence(value: &str) -> Option<String> {
     let rule = value.trim().to_ascii_uppercase();
     let rule = rule.strip_prefix("RRULE:").unwrap_or(&rule).to_owned();

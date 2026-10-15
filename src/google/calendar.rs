@@ -55,8 +55,6 @@ impl GoogleCalendarClient {
         }
     }
 
-    /// Inserts an event with a caller-chosen ID. Google rejects a second insert
-    /// with the same ID, which makes retries and replayed messages idempotent.
     pub async fn insert_event(
         &self,
         event_id: &str,
@@ -114,8 +112,6 @@ impl GoogleCalendarClient {
         }))
     }
 
-    /// Confirms the service account can see events on the calendar, which
-    /// fails the same way an insert would when the calendar isn't shared.
     pub async fn check_access(&self) -> Result<(), AgentError> {
         let mut url = self.events_url()?;
         url.query_pairs_mut().append_pair("maxResults", "1");
@@ -143,8 +139,6 @@ impl GoogleCalendarClient {
     }
 }
 
-/// Google Calendar event IDs may only use base32hex characters (a-v, 0-9),
-/// so the WhatsApp message ID is hex-encoded.
 pub fn event_id_for(message_id: &str) -> String {
     message_id
         .bytes()

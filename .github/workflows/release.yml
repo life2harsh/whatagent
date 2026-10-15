@@ -1,7 +1,5 @@
 name: Release
 
-# Push a tag like v0.2.0 to build Linux binaries and publish a GitHub release.
-# deploy/install.sh downloads the latest one.
 on:
   push:
     tags: ["v*"]
@@ -14,7 +12,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # Built on 22.04 so the binaries run on glibc 2.35+ (Ubuntu 22.04+, Debian 12+).
           - arch: x86_64
             runner: ubuntu-22.04
           - arch: aarch64
@@ -32,6 +29,9 @@ jobs:
           dir=wa-calendar-agent-${{ matrix.arch }}-linux
           mkdir "$dir"
           cp target/release/wa-calendar-agent deploy/install.sh deploy/wa-calendar-agent.service .env.example "$dir/"
+          mkdir "$dir/keep-bridge"
+          cp keep-bridge/keep_bridge.py keep-bridge/requirements.txt deploy/keep-bridge.service \
+            deploy/keep-bridge-install.sh "$dir/keep-bridge/"
           tar -czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
@@ -39,13 +39,27 @@ jobs:
           name: ${{ matrix.arch }}
           path: wa-calendar-agent-*.tar.gz*
 
+  keep-signin:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyinstaller gpsoauth pywebview
+      - run: pyinstaller --onefile --name keep-signin-windows keep-bridge/get_master_token.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keep-signin
+          path: dist/keep-signin-windows.exe
+
   release:
-    needs: build
+    needs: [build, keep-signin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes wa-calendar-agent-*
+      - run: gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes wa-calendar-agent-* keep-signin-windows.exe
         env:
           GH_TOKEN: ${{ github.token }}
