@@ -27,14 +27,23 @@ Events are created with an ID derived from the WhatsApp message ID, so a replaye
 
 Google's official Keep API is limited to Workspace accounts, so `keep-bridge/` uses the unofficial [gkeepapi](https://github.com/kiwiz/gkeepapi) with a **master token**. Treat that token like your password: it grants broad access to the account, and Google may revoke it (for example after a password change), in which case notes queue up in SQLite until you replace it.
 
+The quick way, from your machine (after the agent is installed):
+
+```bash
+deploy/keep-setup.sh you@your-server -i ~/.ssh/my-key
+```
+
+It opens a small sign-in window for you to sign in to Google, turns that into a master token locally, installs the bridge on the server, checks that it can log in, and connects the agent. Re-run it if Google revokes the token. To ship new bridge code without signing in again, use `deploy/keep-setup.sh you@your-server -i ~/.ssh/my-key --update`, which reuses the token already on the server. Each task becomes an item on one Keep checklist, named by `KEEP_LIST_TITLE` (default "WhatsApp Todos"). The manual steps follow.
+
 1. Get a master token on a trusted machine:
 
    ```bash
-   python3 -m venv /tmp/gpsoauth && /tmp/gpsoauth/bin/pip install gpsoauth
+   python3 -m venv --system-site-packages /tmp/gpsoauth
+   /tmp/gpsoauth/bin/pip install gpsoauth pywebview
    /tmp/gpsoauth/bin/python keep-bridge/get_master_token.py
    ```
 
-   The script explains how to get the `oauth_token` cookie from `https://accounts.google.com/EmbeddedSetup`.
+   It opens a small sign-in window (an embedded web view, which Google does not block the way it blocks a remote-controlled browser). Sign in and click "I agree", and it reads the one-time `oauth_token` cookie from the window itself, then prints `KEEP_EMAIL` and `KEEP_MASTER_TOKEN`. Without a graphical display, or with `--manual`, it asks you to copy the cookie from `https://accounts.google.com/EmbeddedSetup` by hand instead.
 
 2. Install the bridge on the server:
 

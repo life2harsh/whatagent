@@ -4,7 +4,7 @@ A small Rust daemon for turning text messages and voice notes sent to a WhatsApp
 
 ## Scope
 
-Only a configured owner self-chat is eligible for processing. The adapter uses `whatsapp-rust` 0.7 with persistent SQLite session storage. Messages and voice notes are parsed by Gemini into a structured event, validated in Rust, and created in Google Calendar through a service account. Voice notes are downloaded and decrypted by the WhatsApp client and sent to Gemini inline.
+Only a configured owner self-chat is eligible for processing. The adapter uses `whatsapp-rust` 0.7 with persistent SQLite session storage. Messages and voice notes are parsed by Gemini, which decides whether the request is a calendar event or a task, then it is validated in Rust and either created in Google Calendar through a service account or stored as a task. A voice note like "remind me to buy milk tomorrow at 6pm" becomes a task (and, when Keep sync is on, a Keep note); one like "dentist tomorrow at 5" becomes a calendar event. Voice notes are downloaded and decrypted by the WhatsApp client and sent to Gemini inline.
 
 ## Local development
 
@@ -53,7 +53,7 @@ SQLite stores message processing state, pending confirmations, tasks, and delive
 
 ## Tasks and WhatsApp reminders
 
-Tasks and reminders are stored durably in the same SQLite database. Use ISO-8601 times with a timezone offset until the natural-language task workflow is enabled.
+Tasks and reminders are stored durably in the same SQLite database. You can create a task in two ways: the explicit `todo` command below (ISO-8601 times with a timezone offset), or plain language in a text or voice message, which Gemini reads as a task and turns into one with a due or reminder time.
 
 ```text
 todo submit DBMS assignment | due 2026-09-18T17:00:00+05:30 | remind 2026-09-18T16:00:00+05:30 | note upload the PDF
@@ -62,7 +62,7 @@ done 1
 remind 2026-09-18T16:00:00+05:30 | call Abhinav
 ```
 
-The connected daemon checks due reminders every `REMINDER_POLL_SECONDS` seconds, sends the message to the configured self-chat, and records delivery in SQLite. A failed send remains recoverable instead of being silently discarded. When `KEEP_BRIDGE_URL` is configured, each new task is also written to Google Keep through the local `keep-bridge`. Keep sync is durable and retried independently from task creation.
+The connected daemon checks due reminders every `REMINDER_POLL_SECONDS` seconds, sends the message to the configured self-chat, and records delivery in SQLite. A failed send remains recoverable instead of being silently discarded. When `KEEP_BRIDGE_URL` is configured, each new task is appended as an unchecked item to a single Google Keep checklist (named by `KEEP_LIST_TITLE`, default "WhatsApp Todos") through the local `keep-bridge`, so all your todos live in one list. Keep sync is durable and retried independently from task creation. After changing the bridge, redeploy it with `deploy/keep-setup.sh you@server -i key --update` (no new sign-in).
 
 ## Calendar details, confirmation, and recurrence
 
@@ -128,7 +128,7 @@ sudo systemctl restart wa-calendar-agent                   # restart
 sudo -u wa-calendar sh -c 'set -a; . /etc/wa-calendar-agent.env; /opt/wa-calendar-agent/wa-calendar-agent check'
 ```
 
-The service is capped at 25% CPU and 512 MB of memory, so it can share a small VPS with other services. For Keep sync, also install `deploy/keep-bridge.service` as described in `docs/GOOGLE_SETUP.md`.
+The service is capped at 25% CPU and 512 MB of memory, so it can share a small VPS with other services. For Keep sync, run `deploy/keep-setup.sh you@your-server` from your machine (see `docs/GOOGLE_SETUP.md`).
 
 ### Publishing releases
 
@@ -149,6 +149,7 @@ git push origin v0.1.0
 - [ ] Set `OWNER_JID` to the `OWNER_JID=` line printed by `wa-calendar-agent pair` (the installer does this for you).
 - [ ] Run `cargo run -- run`, scan the QR code, and verify a session database is created with restrictive permissions.
 - [ ] Send `cal test event tomorrow at 6pm` from the linked account's self-chat and receive one concise reply.
-- [ ] Send a real voice note and verify one Calendar event and one WhatsApp confirmation.
+- [ ] Send a real voice note for an event and verify one Calendar event and one WhatsApp confirmation.
+- [ ] Send a voice note like "remind me to buy milk tomorrow at 6pm" and verify one task (and a new item on the Keep checklist when sync is on).
 - [ ] Send a clear recurring request and verify the event shows as repeating in Google Calendar.
 - [ ] Add a task, list it, complete it, and verify one scheduled reminder reaches the self-chat.
